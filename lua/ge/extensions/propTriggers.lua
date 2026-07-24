@@ -571,11 +571,20 @@ local function onPreRender(dt)
                 if not trg._center then goto skip_draw end
 
                 local drawCenter = trg._center
+                local oldDrawCenter = trg._prevDrawCenter or drawCenter
                 trg._prevDrawCenter = drawCenter
+                
+                local actualFadeCenter = oldDrawCenter
+                if trg._meshBoxCenterOffset and trg._prevAx then
+                    actualFadeCenter = actualFadeCenter + trg._prevAx * trg._meshBoxCenterOffset.x
+                                                        + trg._prevAy * trg._meshBoxCenterOffset.y
+                                                        + trg._prevAz * trg._meshBoxCenterOffset.z
+                end
+
                 local hx, hy, hz = trg.halfSize.x, trg.halfSize.y, trg.halfSize.z
                 local maxH = math.max(hx, hy, hz)
                 local isHovered = (hoveredId == trg.id)
-                local rDist = rayPointDist(ray.pos, ray.dir, drawCenter)
+                local rDist = rayPointDist(ray.pos, ray.dir, actualFadeCenter)
                 
                 local coreDist = math.max(0.03, maxH)
                 local fadeDist = math.max(0.30, maxH + 0.27)
@@ -590,13 +599,7 @@ local function onPreRender(dt)
                     tr, tg, tb, targetAlpha = 0.10, 0.75, 0.30, 0.28
                 end
 
-                if targetAlpha > trg.alpha then
-                    -- Fade in very quickly when looking at the trigger
-                    trg.alpha = trg.alpha + (targetAlpha - trg.alpha) * math.min(1, dt * 40)
-                else
-                    -- Fade out smoothly when looking away
-                    trg.alpha = trg.alpha + (targetAlpha - trg.alpha) * math.min(1, dt * 15)
-                end
+                trg.alpha = trg.alpha + (targetAlpha - trg.alpha) * math.min(1, dt * 10)
 
                 if trg.triggerType == "sphere" then
                     if trg.alpha < 0.004 then goto skip_draw end
