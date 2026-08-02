@@ -33,7 +33,7 @@ This example demonstrates how to create a trigger that uses a custom `.obj` mesh
 "propTriggers":[
     ["id", "targetProp", "type", "size", "meshName", "baseTranslation", "baseRotation", "action"],
     
-    // "cruisecontroll_+" is the trigger ID.
+    // "cruisecontrol_+" is the trigger ID.
     // "steering_wheel" is the name of the mesh defined in the "mesh" section when defining props.
     // {"x":90, "y":0, "z":45} applies a local rotation offset.
     // {"x":0.1, "y":0, "z":0} applies a local translation offset along the newly rotated axes.
