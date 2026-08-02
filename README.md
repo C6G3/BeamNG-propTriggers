@@ -37,7 +37,7 @@ This example demonstrates how to create a trigger that uses a custom `.obj` mesh
     // "steering_wheel" is the name of the mesh defined in the "mesh" section when defining props.
     // {"x":90, "y":0, "z":45} applies a local rotation offset.
     // {"x":0.1, "y":0, "z":0} applies a local translation offset along the newly rotated axes.
-    ["cruisecontroll_+", "steering_wheel", "mesh", {"x":1, "y":1, "z":1}, "vehicles/your_vehicle/mesh/trigger_box.obj", {"x":0.1, "y":0, "z":0}, {"x":90, "y":0, "z":45}, ""],
+    ["cruisecontrol_+", "steering_wheel", "mesh", {"x":1, "y":1, "z":1}, "vehicles/your_vehicle/mesh/trigger_box.obj", {"x":0.1, "y":0, "z":0}, {"x":90, "y":0, "z":45}, ""],
 ],
 ```
 
@@ -60,10 +60,10 @@ To make your triggers actually *do* something and display native UI text, you ma
 "propTriggerEventLinks":[
     ["triggerId", "triggerInput", "inputAction"],
     
-    // Maps the "cruisecontroll_+" trigger to the "cruisecontroll_+" action.
+    // Maps the "cruisecontrol_+" trigger to the "cruisecontrol_+" action.
     // When clicked, it fires the onDown event defined in vehicle_name.interaction.json
     // The UI will automatically extract the action's "title" and shortcut binding to display on hover.
-    ["cruisecontroll_+", "action0", "cruisecontroll_+"],
+    ["cruisecontrol_+", "action0", "cruisecontrol_+"],
 ],
 ```
 
