@@ -15,8 +15,33 @@ local cursorVisible = true
 local initializedVehicles = false
 local prevHoveredPropTrigger = { vehId = nil, triggerId = nil }
 
+local is039OrHigher = nil
+local function checkIs039OrHigher()
+    if is039OrHigher ~= nil then return is039OrHigher end
+    local ver = beamng_version or beamng_versiond or beamng_versionb
+    if type(ver) == "string" then
+        local major, minor = string.match(ver, "^(%d+)%.(%d+)")
+        if major and minor then
+            local majNum = tonumber(major) or 0
+            local minNum = tonumber(minor) or 0
+            if majNum > 0 or minNum >= 39 then
+                is039OrHigher = true
+                return true
+            else
+                is039OrHigher = false
+                return false
+            end
+        end
+    end
+    if core_vehicle_triggerLabelPlacement or (extensions and extensions.core_vehicle_triggerLabelPlacement) then
+        is039OrHigher = true
+        return true
+    end
+    is039OrHigher = false
+    return false
+end
+
 -- Find the first keyboard binding for a given action string, matching inversion state.
--- Mirrors the same function in core/vehicleTriggers.lua.
 local function findKeyboardBindingForAction(actionStr, desiredInverted)
     for _, device in ipairs(core_input_bindings and core_input_bindings.bindings or {}) do
         local contents = device.contents or {}
@@ -27,6 +52,296 @@ local function findKeyboardBindingForAction(actionStr, desiredInverted)
                 end
             end
         end
+    end
+end
+
+local function isControllerDeviceType(deviceType)
+    return deviceType ~= "keyboard" and deviceType ~= "mouse"
+end
+
+-- Preferred binding finder for 0.39+ (matching core/vehicleTriggers.lua)
+local function findBindingForAction(actionStr, desiredInverted)
+    local preferredPad = core_camera and core_camera.getLastFilter and core_camera.getLastFilter() == FILTER_PAD
+    local recentDevices = core_input_bindings and core_input_bindings.getRecentDevices and core_input_bindings.getRecentDevices() or {}
+    local recentRank = {}
+    for i, devname in ipairs(recentDevices) do
+        recentRank[devname] = i
+    end
+
+    local bestDeviceName, bestBinding, bestScore = nil, nil, -math.huge
+
+    for _, device in ipairs(core_input_bindings and core_input_bindings.bindings or {}) do
+        local contents = device.contents or {}
+        local deviceType = contents.devicetype
+        for _, b in ipairs(contents.bindings or {}) do
+            if b.action == actionStr and ((b.isInverted or false) == (desiredInverted or false)) then
+                local score = 0
+                local isController = isControllerDeviceType(deviceType)
+                if preferredPad then
+                    if isController then score = score + 100 end
+                else
+                    if deviceType == "keyboard" then
+                        score = score + 100
+                    elseif deviceType == "mouse" then
+                        score = score + 80
+                    end
+                end
+
+                local rank = recentRank[device.devname]
+                if rank then
+                    score = score + math.max(0, 50 - rank)
+                end
+
+                if score > bestScore then
+                    bestScore = score
+                    bestDeviceName = device.devname
+                    bestBinding = b
+                end
+            end
+        end
+    end
+
+    return bestDeviceName, bestBinding
+end
+
+-- ── 0.39 Screen Projection & Bubble Placement ──
+local w2sCamRight = vec3()
+local w2sCamForward = vec3()
+local w2sCamUp = vec3()
+local w2sToPoint = vec3()
+local w2sContextValid = false
+local w2sContextCamPos = nil
+local w2sContextHalfTan = 0
+local w2sContextAspect = 0
+
+local function rotateVecByQuatInPlace(outVec, quatValue, inX, inY, inZ)
+    local qx, qy, qz, qw = quatValue.x, quatValue.y, quatValue.z, quatValue.w
+    local tx = 2 * (qy * inZ - qz * inY)
+    local ty = 2 * (qz * inX - qx * inZ)
+    local tz = 2 * (qx * inY - qy * inX)
+    outVec:set(
+        inX - qw * tx + (qy * tz - qz * ty),
+        inY - qw * ty + (qz * tx - qx * tz),
+        inZ - qw * tz + (qx * ty - qy * tx)
+    )
+end
+
+local function updateWorldPosToScreenContext()
+    w2sContextValid = false
+    if not core_camera or not core_camera.getPosition or not core_camera.getQuat then return false end
+    local camPos = core_camera.getPosition()
+    local camRot = core_camera.getQuat()
+    if not camPos or not camRot then return false end
+
+    local canvas = scenetree.findObject("Canvas")
+    if not canvas or not canvas.getWindowClientSizeXY then return false end
+    local clientW, clientH = canvas:getWindowClientSizeXY()
+    if not clientW or not clientH or clientW <= 0 or clientH <= 0 then return false end
+
+    local fovRad = core_camera.getFovRad and core_camera.getFovRad() or nil
+    if not fovRad or fovRad <= 0 then return false end
+    local aspect = clientW / clientH
+    if aspect <= 0 then return false end
+
+    local halfTan = math.tan(fovRad * 0.5)
+    if halfTan == 0 then return false end
+
+    rotateVecByQuatInPlace(w2sCamRight, camRot, 1, 0, 0)
+    rotateVecByQuatInPlace(w2sCamForward, camRot, 0, 1, 0)
+    rotateVecByQuatInPlace(w2sCamUp, camRot, 0, 0, 1)
+
+    w2sContextCamPos = camPos
+    w2sContextHalfTan = halfTan
+    w2sContextAspect = aspect
+    w2sContextValid = true
+    return true
+end
+
+local function worldPosToScreenPercent01(worldPos, out)
+    if not worldPos then return nil end
+    if extensions.core_vehicleTriggers and extensions.core_vehicleTriggers.worldPosToScreenPercent01 then
+        return extensions.core_vehicleTriggers.worldPosToScreenPercent01(worldPos, out)
+    end
+    if not w2sContextValid and not updateWorldPosToScreenContext() then return nil end
+
+    w2sToPoint:setSub2(worldPos, w2sContextCamPos)
+
+    local depth = w2sToPoint:dot(w2sCamForward)
+    if not depth or depth <= 0 then return nil end
+
+    local nx = w2sToPoint:dot(w2sCamRight) / (depth * w2sContextHalfTan * w2sContextAspect)
+    local ny = w2sToPoint:dot(w2sCamUp) / (depth * w2sContextHalfTan)
+
+    out = out or {}
+    out.x = (nx + 1) * 0.5
+    out.y = (1 - ny) * 0.5
+    return out
+end
+
+local LABEL_OFFSET_REM = "0.6em"
+local function clamp01(v) return math.max(0, math.min(1, v)) end
+
+local function computeLabelPlacementForPropTrigger(centerWorld, ax, ay, az, hx, hy, hz, screenPos)
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local hasAnyCorner = false
+
+    local tmpWorld = vec3()
+    local tmpScreen = {}
+    for sx = -1, 1, 2 do
+        for sy = -1, 1, 2 do
+            for sz = -1, 1, 2 do
+                tmpWorld:setAddScaled(centerWorld, ax, hx * sx)
+                tmpWorld:setAddScaled(tmpWorld, ay, hy * sy)
+                tmpWorld:setAddScaled(tmpWorld, az, hz * sz)
+                local sp = worldPosToScreenPercent01(tmpWorld, tmpScreen)
+                if sp and type(sp.x) == "number" and type(sp.y) == "number" then
+                    hasAnyCorner = true
+                    minX = math.min(minX, sp.x)
+                    maxX = math.max(maxX, sp.x)
+                    minY = math.min(minY, sp.y)
+                    maxY = math.max(maxY, sp.y)
+                end
+            end
+        end
+    end
+
+    local bounds = {}
+    if hasAnyCorner then
+        bounds.minX = minX
+        bounds.maxX = maxX
+        bounds.minY = minY
+        bounds.maxY = maxY
+        bounds.centerX = (minX + maxX) * 0.5
+        bounds.centerY = (minY + maxY) * 0.5
+    elseif screenPos then
+        local x = clamp01(screenPos.x)
+        local y = clamp01(screenPos.y)
+        bounds.minX = x; bounds.maxX = x
+        bounds.minY = y; bounds.maxY = y
+        bounds.centerX = x; bounds.centerY = y
+    else
+        return nil
+    end
+
+    local side = "right"
+    local centerMin = 0.15
+    local centerMax = 0.85
+    local insideCenter70 = bounds.minX >= centerMin and bounds.maxX <= centerMax and bounds.minY >= centerMin and bounds.maxY <= centerMax
+    if insideCenter70 then
+        side = "bottom"
+    else
+        local rightSpace = 1 - bounds.maxX
+        local leftSpace = bounds.minX
+        local topSpace = bounds.minY
+        local bottomSpace = 1 - bounds.maxY
+        local bestSpace = rightSpace
+        if leftSpace > bestSpace then bestSpace = leftSpace; side = "left" end
+        if topSpace > bestSpace then bestSpace = topSpace; side = "top" end
+        if bottomSpace > bestSpace then side = "bottom" end
+    end
+
+    local labelX, labelY, labelTx, labelTy
+    if side == "right" then
+        labelX = bounds.maxX; labelY = bounds.centerY; labelTx = LABEL_OFFSET_REM; labelTy = "-50%"
+    elseif side == "left" then
+        labelX = bounds.minX; labelY = bounds.centerY; labelTx = "calc(-100% - " .. LABEL_OFFSET_REM .. ")"; labelTy = "-50%"
+    elseif side == "top" then
+        labelX = bounds.centerX; labelY = bounds.minY; labelTx = "-50%"; labelTy = "calc(-100% - " .. LABEL_OFFSET_REM .. ")"
+    else
+        labelX = bounds.centerX; labelY = bounds.maxY; labelTx = "-50%"; labelTy = LABEL_OFFSET_REM
+    end
+
+    return {
+        labelX = clamp01(labelX),
+        labelY = clamp01(labelY),
+        labelTx = labelTx,
+        labelTy = labelTy,
+        labelSide = side,
+        bounds = bounds
+    }
+end
+
+local function formatActionTitle(rawTitle)
+    if not rawTitle or rawTitle == "" then return "" end
+    if type(_tr) == "function" then
+        local translated = _tr(rawTitle)
+        if translated and translated ~= "" and translated ~= rawTitle then return translated end
+    end
+    local str = tostring(rawTitle)
+    str = str:gsub("^ui%.inputActions%.vehicle%.", ""):gsub("^ui%.inputActions%.", ""):gsub("%.title$", "")
+    str = str:gsub("_", " ")
+    if str:match("^%l") then
+        str = str:gsub("(%a)([%w_']*)", function(first, rest) return first:upper() .. rest:lower() end)
+    end
+    return str
+end
+
+local lastPropTriggerCrosshairSent = false
+
+local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerColor, labelPlacement, hoveredTriggerName)
+    local function roundCoord(v)
+        if not v or type(v) ~= "number" then return nil end
+        return math.floor(v * 10000 + 0.5) / 10000
+    end
+
+    local xRounded = roundCoord(x)
+    local yRounded = roundCoord(y)
+    local action0 = actionTitles and actionTitles.action0 and (type(_tr) == "function" and _tr(actionTitles.action0) or actionTitles.action0) or nil
+    local action1 = actionTitles and actionTitles.action1 and (type(_tr) == "function" and _tr(actionTitles.action1) or actionTitles.action1) or nil
+    local action2 = actionTitles and actionTitles.action2 and (type(_tr) == "function" and _tr(actionTitles.action2) or actionTitles.action2) or nil
+    local colorR = triggerColor and triggerColor.r or 0.235
+    local colorG = triggerColor and triggerColor.g or 0.396
+    local colorB = triggerColor and triggerColor.b or 1.0
+    local colorA = triggerColor and triggerColor.a or 0.75
+    local labelX = labelPlacement and labelPlacement.labelX or xRounded
+    local labelY = labelPlacement and labelPlacement.labelY or yRounded
+    local labelTx = labelPlacement and labelPlacement.labelTx or "0.6em"
+    local labelTy = labelPlacement and labelPlacement.labelTy or "-50%"
+    local labelSide = labelPlacement and labelPlacement.labelSide or "right"
+    local boundsMinX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.minX or xRounded
+    local boundsMaxX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.maxX or xRounded
+    local boundsMinY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.minY or yRounded
+    local boundsMaxY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.maxY or yRounded
+    local boundsCenterX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.centerX or xRounded
+    local boundsCenterY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.centerY or yRounded
+
+    local payload = {
+        x = xRounded,
+        y = yRounded,
+        action0 = action0,
+        action1 = action1,
+        action2 = action2,
+        colorR = colorR,
+        colorG = colorG,
+        colorB = colorB,
+        colorA = colorA,
+        hoveredTriggerName = hoveredTriggerName,
+        labelX = labelX,
+        labelY = labelY,
+        labelTx = labelTx,
+        labelTy = labelTy,
+        labelSide = labelSide,
+        boundsMinX = boundsMinX,
+        boundsMaxX = boundsMaxX,
+        boundsMinY = boundsMinY,
+        boundsMaxY = boundsMaxY,
+        boundsCenterX = boundsCenterX,
+        boundsCenterY = boundsCenterY,
+    }
+
+    if guihooks and guihooks.triggerStream then
+        guihooks.triggerStream("vehicleTriggerCrosshairTarget", payload)
+        lastPropTriggerCrosshairSent = true
+    end
+end
+
+local function clearPropTriggerCrosshairTargetStream()
+    if lastPropTriggerCrosshairSent then
+        if guihooks and guihooks.triggerStream then
+            guihooks.triggerStream("vehicleTriggerCrosshairTarget", {})
+        end
+        lastPropTriggerCrosshairSent = false
     end
 end
 
@@ -414,13 +729,23 @@ local function onCursorVisibilityChanged(visible)
 end
 
 local function onPreRender(dt)
-    if not cursorVisible then return end
+    if not cursorVisible then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
     local ray = getCameraMouseRay()
-    if not ray then return end
+    if not ray then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
     
     local propTriggers_globalActionsToDraw = nil
+    local propTriggers_targetToPublish = nil
     local im = ui_imgui
-    if im.GetIO().WantCaptureMouse then return end
+    if im.GetIO().WantCaptureMouse then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
 
     if not initializedVehicles then
         initializedVehicles = true
@@ -632,16 +957,30 @@ local function onPreRender(dt)
                 ::skip_draw::
             end
 
-            -- ── Show title + key binding legend on hover (like native triggers) ──
+            -- ── Show title + key binding legend / 0.39 bubble on hover ──
             local actionsListToDraw = nil
+            local hoveredTrgObj = nil
             if hoveredId then
+                for _, trg in ipairs(triggers) do
+                    if trg.id == hoveredId then
+                        hoveredTrgObj = trg
+                        break
+                    end
+                end
+            end
+
+            if hoveredId and hoveredTrgObj then
                 local vehLinks = propTriggerLinksDict[vehId]
-                if vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId]['action0'] then
-                    local lnk = vehLinks[hoveredId]['action0'][1]
-                    if lnk then
-                        local vData = extensions.core_vehicle_manager.getVehicleData(vehId)
+                local vData = extensions.core_vehicle_manager.getVehicleData(vehId)
+                local actionTitles = {}
+                local actionsList = {}
+
+                for actionIdx = 0, 2 do
+                    local actionKey = "action" .. tostring(actionIdx)
+                    local links = vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId][actionKey]
+                    local lnk = type(links) == "table" and links[1] or nil
+                    if lnk and lnk.inputAction then
                         local actionName = lnk.inputAction
-                        
                         local action = nil
                         if vData and vData.vdata and vData.vdata.inputActions then
                             action = vData.vdata.inputActions[actionName]
@@ -651,32 +990,80 @@ local function onPreRender(dt)
                             if activeActions then action = activeActions[actionName] end
                         end
 
-                        if action then
-                            local actionStr = actionName
-                            if lnk.namespace == 'vehicle' and action.vehicle then
-                                actionStr = action.vehicle .. '__' .. actionStr
-                            end
+                        local rawTitle = action and action.title or actionName
+                        local title = formatActionTitle(rawTitle)
+                        actionTitles[actionKey] = title
 
-                            local desiredInverted = lnk.isInverted == true
-                            local keyboardDev, keyboardBinding = findKeyboardBindingForAction(actionStr, desiredInverted)
+                        local actionStr = actionName
+                        if action and action.vehicle and lnk.namespace == 'vehicle' then
+                            actionStr = action.vehicle .. '__' .. actionStr
+                        end
 
+                        local desiredInverted = lnk.isInverted == true
+                        local bindingDev, actionBinding = findBindingForAction(actionStr, desiredInverted)
+                        if not actionBinding then
+                            bindingDev, actionBinding = findKeyboardBindingForAction(actionStr, desiredInverted)
+                        end
+
+                        if actionBinding and bindingDev then
+                            table.insert(actionsList, {
+                                action = actionStr,
+                                label = title,
+                                bindings = {{ device = bindingDev, control = actionBinding.control }}
+                            })
+                        elseif not checkIs039OrHigher() then
+                            -- Legacy (<0.39): show in top-right legend even without key binding
                             local actionItem = {}
                             if type(action) == 'table' then
                                 for k, v in pairs(action) do actionItem[k] = v end
                             end
                             actionItem.action = actionStr
-                            actionItem.label = action.title
-
-                            if keyboardBinding and keyboardDev then
-                                actionItem.bindings = {{ device = keyboardDev, control = keyboardBinding.control }}
-                            end
-                            actionsListToDraw = { actionItem }
+                            actionItem.label = title
+                            table.insert(actionsList, actionItem)
                         end
+                    end
+                end
+
+                if not next(actionTitles) then
+                    local rawFallback = hoveredTrgObj.action and hoveredTrgObj.action ~= "" and hoveredTrgObj.action or hoveredId
+                    local fallbackTitle = formatActionTitle(rawFallback)
+                    actionTitles["action0"] = fallbackTitle
+                    if not checkIs039OrHigher() then
+                        table.insert(actionsList, {
+                            action = hoveredId,
+                            label = fallbackTitle
+                        })
+                    end
+                end
+
+                if #actionsList > 0 then
+                    actionsListToDraw = actionsList
+                end
+
+                -- In >=0.39, prepare the 3D/screen-space bubble target payload
+                if checkIs039OrHigher() and hoveredTrgObj._center then
+                    local drawCenter = hoveredTrgObj._center
+                    local screenPos = worldPosToScreenPercent01(drawCenter)
+                    if screenPos then
+                        local hx = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.x or 0.1
+                        local hy = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.y or 0.1
+                        local hz = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.z or 0.1
+                        local ax = hoveredTrgObj._ax or vec3(1,0,0)
+                        local ay = hoveredTrgObj._ay or vec3(0,1,0)
+                        local az = hoveredTrgObj._az or vec3(0,0,1)
+                        local labelPlacement = computeLabelPlacementForPropTrigger(drawCenter, ax, ay, az, hx, hy, hz, screenPos)
+                        propTriggers_targetToPublish = {
+                            x = screenPos.x,
+                            y = screenPos.y,
+                            actionTitles = actionTitles,
+                            color = {r=0.235, g=0.396, b=1.0, a=0.75},
+                            labelPlacement = labelPlacement,
+                            name = hoveredId
+                        }
                     end
                 end
             end
 
-            -- Instead of updating the UI immediately here (which gets overwritten by subsequent vehicles), we save it
             if actionsListToDraw then
                 propTriggers_globalActionsToDraw = actionsListToDraw
             end
@@ -712,6 +1099,22 @@ local function onPreRender(dt)
         end
     end
 
+    -- In >=0.39, update or clear the trigger details bubble
+    if checkIs039OrHigher() then
+        if propTriggers_targetToPublish then
+            setPropTriggerCrosshairTargetStream(
+                propTriggers_targetToPublish.x,
+                propTriggers_targetToPublish.y,
+                propTriggers_targetToPublish.actionTitles,
+                propTriggers_targetToPublish.color,
+                propTriggers_targetToPublish.labelPlacement,
+                propTriggers_targetToPublish.name
+            )
+        else
+            clearPropTriggerCrosshairTargetStream()
+        end
+    end
+
     if extensions.ui_bindingsLegend then
         if propTriggers_globalActionsToDraw then
             extensions.ui_bindingsLegend.addActions('propTriggers', propTriggers_globalActionsToDraw, { priority = 11, hideConstant = true })
@@ -725,6 +1128,10 @@ local function onExtensionLoaded()
 end
 
 local function onExtensionUnloaded()
+    clearPropTriggerCrosshairTargetStream()
+    if extensions.ui_bindingsLegend then
+        extensions.ui_bindingsLegend.addActions('propTriggers', {})
+    end
 end
 
 M.onExtensionLoaded         = onExtensionLoaded
