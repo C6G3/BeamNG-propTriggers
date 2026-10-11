@@ -2,7 +2,7 @@
 
 `propTriggers` is a custom Lua extension for BeamNG.drive that vastly improves vehicle interiors by allowing modders to bind interactive click triggers directly to animated vehicle props.
 
-Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nodes. If you have an animated prop (such as an indicator stalk, gear shifter, steering wheel, or rotary knob), a node-based trigger stays behind or drifts when the prop moves. `propTriggers` solves this by attaching triggers directly to the live 3D transform of the prop, perfectly following its position and rotation in real time without requiring complex animation curves.
+Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nodes. If you have an animated prop (such as an indicator stalk, gear shifter, steering wheel, or switch), a node-based trigger stays behind or drifts when the prop moves. `propTriggers` solves this by attaching triggers directly to the live 3D transform of the prop, perfectly following its position and rotation in real time without requiring complex animation curves.
 
 ---
 
@@ -12,15 +12,7 @@ Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nod
 - **Multiple Target Props (Variant / Swap Support):** `targetProp` (or `targetProps`) accepts a list of candidate prop names (JSON array, nested table, or comma/semicolon/pipe-separated string). `propTriggers` recursively iterates through candidates to bind to whichever prop is currently installed and active on the vehicle (e.g. interchangeable steering wheel variants).
 - **Dynamic In-Game Reconfiguration:** When the player changes vehicle parts in the Vehicle Config menu mid-game, `onVehicleResetted` automatically re-evaluates candidate lists and re-binds triggers to newly equipped parts on the fly.
 - **Mesh Triggers:** Adds a dedicated `mesh` trigger type. You can supply a `.obj` file to define the exact 3D shape of your clickable collision area instead of relying solely on basic boxes or spheres.
-- **Extended Mouse & Wheel Controls:**
-  - **Left Click:** Triggers `action0` / `leftClick` / `mouseLeft`
-  - **Right Click:** Triggers `action1` / `rightClick` / `mouseRight`
-  - **Middle Click:** Triggers `action2` / `middleClick` / `mouseMiddle`
-  - **Mouse Wheel Up & Down:** Triggers `wheelUp` / `wheelDown` (instant scroll events for knobs, selectors, and volume dials)
-- **BeamNG v0.39+ Compatibility & Crosshair Stream:**
-  - Emits the screen-space `vehicleTriggerCrosshairTarget` stream for seamless v0.39+ interactive crosshair bubble rendering.
-  - Automatic icon resolution for infotainment, audio, vehicle lighting, cruise control, differentials, doors, mouse clicks, and scroll wheels.
-  - Native `ui_bindingsLegend` tile support showing trigger action titles and input shortcut badges.
+- **Native UI Integration:** Fully supports the vanilla BeamNG `ui_bindingsLegend`. When a player hovers over your custom trigger, the action title and keyboard shortcut appear in the top-right / top-left corner bar exactly like a native game trigger.
 - **Dynamic Event Links:** Features a `propTriggerEventLinks` system that works identically to `triggerEventLinks2`.
 - **Transform Offsets:** Easily offset the clickable area relative to the prop using `baseTranslation` and `baseRotation`.
 
@@ -117,7 +109,7 @@ In order for triggers to be highlighted and clickable in-game, their action IDs 
 
 ### 5. Event Links (`propTriggerEventLinks`)
 
-Map triggers to actions defined in your vehicle's `interaction.json` (or `input_actions.json`). Supports mouse buttons (`action0`, `action1`, `action2`) as well as scroll wheel events (`wheelUp`, `wheelDown`):
+Map triggers to actions defined in your vehicle's `interaction.json` (or `input_actions.json`):
 
 ```json
 "propTriggerEventLinks":[
@@ -133,12 +125,7 @@ Map triggers to actions defined in your vehicle's `interaction.json` (or `input_
     ["info_prev",     "action0", "info_prev"],
     ["info_next",     "action0", "info_next"],
     ["info_mute",     "action0", "info_mute"],
-    ["info_voiceNav", "action0", "info_voiceNav"],
-
-    // Rotary volume knob with wheel & click actions
-    ["info_volume_knob", "action0",   "info_mute"],
-    ["info_volume_knob", "wheelUp",   "info_volUp"],
-    ["info_volume_knob", "wheelDown", "info_volDown"]
+    ["info_voiceNav", "action0", "info_voiceNav"]
 ],
 ```
 
