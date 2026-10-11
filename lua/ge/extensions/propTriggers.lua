@@ -508,46 +508,93 @@ local function col(row, name, defaultIdx)
     return row[defaultIdx]
 end
 
-local function extractTargetPropList(raw, out)
+local function extractTargetPropList(raw, out, seen)
     out = out or {}
+    seen = seen or {}
     if not raw then return out end
-    if type(raw) == "string" then
-        if raw:find("[,;|]") then
-            for item in raw:gmatch("[^,;|]+") do
-                local trimmed = item:match("^%s*(.-)%s*$")
-                if trimmed and trimmed ~= "" then
+
+    local function addCandidate(str)
+        if type(str) == "string" then
+            local trimmed = str:match("^%s*[\"']?(.-)[\"']?%s*$")
+            if trimmed and trimmed ~= "" then
+                local lowerKey = trimmed:lower()
+                if not seen[lowerKey] then
+                    seen[lowerKey] = true
                     table.insert(out, trimmed)
                 end
             end
-        else
-            local trimmed = raw:match("^%s*(.-)%s*$")
-            if trimmed and trimmed ~= "" then
-                table.insert(out, trimmed)
-            end
         end
-    elseif type(raw) == "table" then
+    end
+
+    local t = type(raw)
+    if t == "string" then
+        if raw:find("[,;|]") then
+            for item in raw:gmatch("[^,;|]+") do
+                addCandidate(item)
+            end
+        else
+            addCandidate(raw)
+        end
+    elseif t == "table" then
+        -- 1. Recursively traverse array elements in numeric order
         local n = #raw
         if n > 0 then
             for i = 1, n do
-                extractTargetPropList(raw[i], out)
+                extractTargetPropList(raw[i], out, seen)
             end
-        else
-            for _, v in pairs(raw) do
-                extractTargetPropList(v, out)
+        end
+        -- 2. Traverse any named/dict keys (e.g. targetProps, targetProp, mesh, name, prop)
+        for k, v in pairs(raw) do
+            if type(k) == "string" then
+                local kLower = k:lower()
+                if kLower == "targetprop" or kLower == "targetprops" or kLower == "mesh" or kLower == "name" or kLower == "prop" then
+                    extractTargetPropList(v, out, seen)
+                elseif type(k) ~= "number" or (k < 1 or k > n) then
+                    if type(v) == "table" or type(v) == "string" then
+                        extractTargetPropList(v, out, seen)
+                    end
+                end
+            elseif type(k) == "number" and (k < 1 or k > n) then
+                extractTargetPropList(v, out, seen)
             end
         end
     end
     return out
 end
 
+local function propMatchesCandidate(prop, candidate)
+    if not prop or not candidate or candidate == "" then return false end
+    local candClean = candidate:lower():match("^%s*[\"']?(.-)[\"']?%s*$")
+    if not candClean or candClean == "" then return false end
+
+    local function checkStr(val)
+        if type(val) ~= "string" then return false end
+        local valClean = val:lower():match("^%s*(.-)%s*$")
+        if valClean == candClean then return true end
+        local vBase = valClean:gsub("%.%w+$", "")
+        local cBase = candClean:gsub("%.%w+$", "")
+        if vBase == cBase and vBase ~= "" then return true end
+        return false
+    end
+
+    if checkStr(prop.mesh) then return true end
+    if checkStr(prop.originalMesh) then return true end
+    if checkStr(prop.name) then return true end
+    return false
+end
+
 local function findAvailableProp(beObj, vData, targetProps)
     if not targetProps or #targetProps == 0 then return nil, nil, nil end
     if not vData or not vData.vdata or not vData.vdata.props then return nil, nil, nil end
 
+    local propsTable = vData.vdata.props
+
+    -- Primary search: iterate candidate props in priority order, looking for an enabled prop
+    -- whose live C++ SimObject (beObj:getProp(pid)) is available and valid.
     for _, candidate in ipairs(targetProps) do
-        for _, prop in pairs(vData.vdata.props) do
-            if prop and (prop.mesh == candidate or prop.name == candidate) then
-                local pid = prop.pid
+        for k, prop in pairs(propsTable) do
+            if prop and not prop.disabled and propMatchesCandidate(prop, candidate) then
+                local pid = prop.pid or (type(k) == "number" and k) or prop.id
                 if pid ~= nil then
                     if beObj then
                         local pObj = beObj:getProp(pid)
@@ -562,11 +609,15 @@ local function findAvailableProp(beObj, vData, targetProps)
         end
     end
 
-    if beObj then
-        for _, candidate in ipairs(targetProps) do
-            for _, prop in pairs(vData.vdata.props) do
-                if prop and (prop.mesh == candidate or prop.name == candidate) then
-                    return prop.pid, nil, prop
+    -- Secondary fallback: if beObj exists but live getProp wasn't ready yet during early spawn,
+    -- match the first candidate that exists in the vehicle's compiled props table.
+    for _, candidate in ipairs(targetProps) do
+        for k, prop in pairs(propsTable) do
+            if prop and not prop.disabled and propMatchesCandidate(prop, candidate) then
+                local pid = prop.pid or (type(k) == "number" and k) or prop.id
+                if pid ~= nil then
+                    local pObj = beObj and beObj:getProp(pid) or nil
+                    return pid, pObj, prop
                 end
             end
         end
@@ -609,9 +660,11 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                 local idY   = getNodeId(vData, col(row, "idY",   -1))
 
                 local triggerId  = col(row, "id", 1) or col(row, "name", 1)
-                local rawTargetProp = col(row, "targetProp", 2)
-                local targetProps = extractTargetPropList(rawTargetProp)
-                local firstTargetProp = targetProps[1] or (type(rawTargetProp) == "string" and rawTargetProp or nil)
+                local rawTargetProp1 = col(row, "targetProps", -1)
+                local rawTargetProp2 = col(row, "targetProp", 2)
+                local targetProps = extractTargetPropList(rawTargetProp1)
+                if rawTargetProp2 then extractTargetPropList(rawTargetProp2, targetProps) end
+                local firstTargetProp = targetProps[1] or (type(rawTargetProp2) == "string" and rawTargetProp2 or (type(rawTargetProp1) == "string" and rawTargetProp1 or nil))
 
                 if triggerId and triggerId ~= "id" and triggerId ~= "name" then
                     table.insert(triggersByVeh[vehId], {
@@ -625,7 +678,7 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                         id          = triggerId,
                         targetProp  = firstTargetProp,
                         targetProps = targetProps,
-                        rawTargetProp = rawTargetProp,
+                        rawTargetProp = rawTargetProp2 or rawTargetProp1,
                         action      = col(row, "action", 7) or "",
                         meshName    = col(row, "meshName", 5),
                         icon        = col(row, "icon", -1),
@@ -795,32 +848,17 @@ local function loadMeshTriggersOBJ(vehId)
     
     local beObj = be:getObjectByID(vehId)
     for _, trg in ipairs(triggers) do
-        if trg.targetProps and #trg.targetProps > 0 then
-            local pid, pObj, prop = findAvailableProp(beObj, vData, trg.targetProps)
+        local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or (trg.targetProp and trg.targetProp ~= "" and { trg.targetProp } or nil)
+        if candidates and #candidates > 0 then
+            local pid, pObj, prop = findAvailableProp(beObj, vData, candidates)
             if pid ~= nil and prop then
                 trg._targetPropId = pid
-                trg._activeTargetProp = prop.mesh or prop.name
+                trg._activeTargetProp = prop.mesh or prop.originalMesh or prop.name
                 if not trg.meshName or trg.meshName == "" then
-                    trg.meshName = prop.mesh
+                    trg.meshName = prop.mesh or prop.originalMesh
                 end
             else
                 log('D', logTag, "Trigger " .. tostring(trg.id) .. " targetProps not found in vehicle props!")
-            end
-        elseif trg.targetProp and trg.targetProp ~= "" then
-            if vData.vdata.props then
-                for _, prop in pairs(vData.vdata.props) do
-                    if prop.mesh == trg.targetProp or prop.name == trg.targetProp then
-                        trg._targetPropId = prop.pid
-                        trg._activeTargetProp = prop.mesh
-                        if not trg.meshName or trg.meshName == "" then
-                            trg.meshName = prop.mesh
-                        end
-                        break
-                    end
-                end
-            end
-            if not trg._targetPropId then
-                log('E', logTag, "Trigger " .. tostring(trg.id) .. " targetProp '" .. tostring(trg.targetProp) .. "' not found in vehicle props!")
             end
         end
 
@@ -888,6 +926,12 @@ end
 
 local function onVehicleSpawned(vehId)
     loadTriggersFromJBeam(vehId)
+end
+
+local function onVehicleResetted(vehId)
+    if vehId then
+        loadTriggersFromJBeam(vehId)
+    end
 end
 
 local function onVehicleDestroyed(vehId)
@@ -959,13 +1003,14 @@ local function onPreRender(dt)
                 local propObj = pid and beObj:getProp(pid) or nil
 
                 -- Dynamic fallback: if propObj is missing, re-resolve across candidate targetProps
-                if not propObj and trg.targetProps and #trg.targetProps > 0 then
-                    local newPid, newPropObj, prop = findAvailableProp(beObj, vData, trg.targetProps)
+                local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or (trg.targetProp and trg.targetProp ~= "" and { trg.targetProp } or nil)
+                if not propObj and candidates and #candidates > 0 then
+                    local newPid, newPropObj, prop = findAvailableProp(beObj, vData, candidates)
                     if newPid and prop then
                         trg._targetPropId = newPid
-                        trg._activeTargetProp = prop.mesh or prop.name
+                        trg._activeTargetProp = prop.mesh or prop.originalMesh or prop.name
                         if not trg.meshName or trg.meshName == "" then
-                            trg.meshName = prop.mesh
+                            trg.meshName = prop.mesh or prop.originalMesh
                         end
                         pid = newPid
                         propObj = newPropObj or beObj:getProp(newPid)
@@ -1431,6 +1476,7 @@ M.onExtensionLoaded         = onExtensionLoaded
 M.onExtensionUnloaded       = onExtensionUnloaded
 M.onPreRender               = onPreRender
 M.onVehicleSpawned          = onVehicleSpawned
+M.onVehicleResetted         = onVehicleResetted
 M.onVehicleDestroyed        = onVehicleDestroyed
 M.onVehicleSwitched         = onVehicleSwitched
 M.onCursorVisibilityChanged = onCursorVisibilityChanged

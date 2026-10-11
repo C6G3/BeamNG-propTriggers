@@ -2,24 +2,25 @@
 
 `propTriggers` is a custom Lua extension for BeamNG.drive that vastly improves vehicle interiors by allowing modders to bind interactive click triggers directly to animated vehicle props.
 
-Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nodes. If you have an animated prop (like an indicator stalk, gear shifter, or switch), a node-based trigger will stay behind when the prop moves. `propTriggers` solves this by attaching triggers directly to the live 3D mesh of the prop, perfectly following its animation without requiring any complex animation curves.
+Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nodes. If you have an animated prop (such as an indicator stalk, gear shifter, steering wheel, or rotary knob), a node-based trigger stays behind or drifts when the prop moves. `propTriggers` solves this by attaching triggers directly to the live 3D transform of the prop, perfectly following its position and rotation in real time without requiring complex animation curves.
 
 ---
 
 ## Features
 
 - **Live Prop Inheritance:** Triggers extract the real-time world transform (position & rotation) of any `targetProp` and follow it seamlessly.
-- **Multiple Target Props (Fallback / Swap Support):** `targetProp` accepts a list of candidate prop names (JSON array or comma-separated string). `propTriggers` recursively iterates through candidates to bind to whichever prop is currently installed on the vehicle (e.g. interchangeable steering wheels). If the player swaps parts in the Vehicle Config menu mid-game, triggers dynamically re-attach on the fly!
-- **Mesh Triggers:** Adds a brand new `mesh` trigger type. You can use a `.obj` file to define the exact 3D shape of your clickable area instead of relying on basic boxes or spheres.
+- **Multiple Target Props (Variant / Swap Support):** `targetProp` (or `targetProps`) accepts a list of candidate prop names (JSON array, nested table, or comma/semicolon/pipe-separated string). `propTriggers` recursively iterates through candidates to bind to whichever prop is currently installed and active on the vehicle (e.g. interchangeable steering wheel variants).
+- **Dynamic In-Game Reconfiguration:** When the player changes vehicle parts in the Vehicle Config menu mid-game, `onVehicleResetted` automatically re-evaluates the candidate lists and re-binds triggers to the newly equipped parts on the fly.
+- **Mesh Triggers:** Adds a dedicated `mesh` trigger type. You can supply a `.obj` file to define the exact 3D shape of your clickable collision area instead of relying solely on basic boxes or spheres.
 - **Extended Mouse & Wheel Controls:**
   - **Left Click:** Triggers `action0` / `leftClick` / `mouseLeft`
   - **Right Click:** Triggers `action1` / `rightClick` / `mouseRight`
   - **Middle Click:** Triggers `action2` / `middleClick` / `mouseMiddle`
-  - **Wheel Up & Down:** Triggers `wheelUp` / `wheelDown` (instant scroll events for knobs, selectors, and volume controls)
-- **BeamNG v0.39+ Crosshair & Icon Support:**
-  - 3D screen-space bubble stream (`vehicleTriggerCrosshairTarget`) with accurate screen bounds projection and label placement.
-  - Automatic icon resolution for infotainment, audio, vehicle lighting, cruise control, differentials, and doors.
-  - Native `ui_bindingsLegend` tile support rendering matching icons and device badges.
+  - **Mouse Wheel Up & Down:** Triggers `wheelUp` / `wheelDown` (instant scroll events for knobs, selectors, and volume dials)
+- **BeamNG v0.39+ Compatibility & Crosshair Stream:**
+  - Emits the screen-space `vehicleTriggerCrosshairTarget` stream for seamless v0.39+ interactive crosshair bubble rendering.
+  - Automatic icon resolution for infotainment, audio, vehicle lighting, cruise control, differentials, doors, mouse clicks, and scroll wheels.
+  - Native `ui_bindingsLegend` tile support showing trigger action titles and input shortcut badges.
 - **Dynamic Event Links:** Features a `propTriggerEventLinks` system that works identically to `triggerEventLinks2`.
 - **Transform Offsets:** Easily offset the clickable area relative to the prop using `baseTranslation` and `baseRotation`.
 
@@ -32,7 +33,7 @@ Copy `propTriggers.lua` into your mod's folder structure at the following path:
 lua/ge/extensions/propTriggers.lua
 ```
 
-The game automatically loads the extension when the vehicle spawns.
+BeamNG automatically loads the extension when a vehicle spawns.
 
 ---
 
@@ -40,79 +41,100 @@ The game automatically loads the extension when the vehicle spawns.
 
 Configure prop triggers in your vehicle's `.jbeam` file, similarly to standard triggers.
 
-### 1. Multiple Target Props Example (Selectable Steering Wheels)
+### 1. Multiple Target Props (Interchangeable Parts)
 
-Pass an array of prop meshes in `targetProp`. The trigger automatically binds to whichever steering wheel the player selects in the vehicle configuration:
+Pass an array or delimited string of candidate prop mesh names in `targetProp`. The trigger automatically binds to whichever part is installed:
 
 ```json
 "propTriggers":[
     ["id", "targetProp", "type", "size", "meshName", "baseTranslation", "baseRotation", "action"],
     
-    // Binds to "g81800dd_steering_w", "g81800dd_steering_w_v8", or "g81800dd_steering_w_wood" depending on what is installed:
+    // Binds to "g81800dd_steering_w", "g81800dd_steering_w_v8", or "g81800dd_steering_w_wood" depending on what is equipped:
     ["cruisecontrol_+", ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0155, "y":0.0130, "z":0.0098}, "", {"x":-0.0841, "y":-0.0193, "z":-0.1219}, {"x":-173.980, "y":0.575, "z":-89.653}, ""],
-    ["info_volUp", ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0083, "y":0.0130, "z":0.0098}, "", {"x":0.0096, "y":-0.1555, "z":-0.0719}, {"x":179.438, "y":-9.823, "z":-89.766}, ""],
+    ["cruisecontrol_-", ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0112, "y":0.0130, "z":0.0098}, "", {"x":-0.1010, "y":-0.0183, "z":-0.1218}, {"x":-173.980, "y":0.575, "z":-90.273}, ""],
+    ["info_volUp",      ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0083, "y":0.0130, "z":0.0098}, "", {"x":0.0096,  "y":-0.1555, "z":-0.0719}, {"x":179.438,  "y":-9.823, "z":-89.766}, ""],
+    ["info_volDown",    ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0083, "y":0.0130, "z":0.0098}, "", {"x":-0.0112, "y":-0.1573, "z":-0.0752}, {"x":179.436,  "y":-10.270,"z":-89.766}, ""],
+    ["info_prev",       ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0112, "y":0.0090, "z":0.0098}, "", {"x":-0.0055, "y":-0.1675, "z":-0.0805}, {"x":177.724,  "y":-7.925, "z":-90.645}, ""],
+    ["info_next",       ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0112, "y":0.0090, "z":0.0098}, "", {"x":-0.0066, "y":-0.1414, "z":-0.0729}, {"x":177.765,  "y":-9.610, "z":-91.333}, ""],
+    ["info_mute",       ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0112, "y":0.0130, "z":0.0098}, "", {"x":-0.0015, "y":-0.1217, "z":-0.0820}, {"x":175.386,  "y":-6.302, "z":-82.139}, ""],
+    ["info_voiceNav",   ["g81800dd_steering_w", "g81800dd_steering_w_v8", "g81800dd_steering_w_wood"], "box", {"x":0.0112, "y":0.0130, "z":0.0098}, "", {"x":0.0199,  "y":-0.1225, "z":-0.0798}, {"x":-179.354, "y":-7.307, "z":-83.843}, ""]
 ],
 ```
 
-*(Comma-separated strings like `"steering_w_1, steering_w_2"` are also supported).*
+*(Delimited string formats such as `"g81800dd_steering_w, g81800dd_steering_w_v8; g81800dd_steering_w_wood"` are also supported).*
 
 ---
 
-### 2. Mesh Trigger Example
+### 2. Mesh Trigger Example (.obj Collision)
 
-Use a custom `.obj` mesh for the clickable collision area:
+Use a custom `.obj` mesh for complex 3D collision surfaces:
 
 ```json
 "propTriggers":[
     ["id", "targetProp", "type", "size", "meshName", "baseTranslation", "baseRotation", "action"],
     
     // "cruisecontrol_+" is the trigger ID.
-    // "steering_wheel" is the prop mesh name.
-    // {"x":90, "y":0, "z":45} applies a local rotation offset.
-    // {"x":0.1, "y":0, "z":0} applies a local translation offset along rotated axes.
-    ["cruisecontrol_+", "steering_wheel", "mesh", {"x":1, "y":1, "z":1}, "vehicles/your_vehicle/mesh/trigger_box.obj", {"x":0.1, "y":0, "z":0}, {"x":90, "y":0, "z":45}, ""],
+    // "steering_wheel" is the prop name.
+    // "vehicles/your_vehicle/mesh/trigger_box.obj" provides the collision geometry.
+    ["cruisecontrol_+", "steering_wheel", "mesh", {"x":1, "y":1, "z":1}, "vehicles/your_vehicle/mesh/trigger_box.obj", {"x":0.1, "y":0, "z":0}, {"x":90, "y":0, "z":45}, ""]
 ],
 ```
 
 ---
 
-### 3. Standard Box Trigger Example (Node-Based)
+### 3. Traditional Node-Based Trigger Example
 
-Traditional node-based triggers (`idRef`, `idX`, `idY`) remain fully supported:
+Traditional node-based triggers (`idRef`, `idX`, `idY`) remain supported:
 
 ```json
 "propTriggers":[
     ["id", "idRef:", "idX:", "idY:", "type", "size", "baseRotation", "rotation", "translation", "baseTranslation", "action"],
-    ["toggle_switch", "sw1","sw3","sw2", "box", {"x":0.015, "y":0.014, "z":0.009}, {"x":284, "y":358, "z":0.6}, {"x":0, "y":0, "z":0}, {"x":0, "y":0, "z":0}, {"x":0.20, "y":0.16, "z":0.07}, ""],
+    ["toggle_switch", "sw1", "sw3", "sw2", "box", {"x":0.015, "y":0.014, "z":0.009}, {"x":284, "y":358, "z":0.6}, {"x":0, "y":0, "z":0}, {"x":0, "y":0, "z":0}, {"x":0.20, "y":0.16, "z":0.07}, ""]
 ],
 ```
 
 ---
 
-### 4. Binding Input Actions (Mouse Clicks & Scroll Wheels)
+### 4. Event Links (`propTriggerEventLinks`)
 
-Map triggers to vehicle actions via `propTriggerEventLinks`. Supports `action0` (LMB), `action1` (RMB), `action2` (MMB), `wheelUp`, and `wheelDown`:
+Map triggers to actions in your vehicle's `interaction.json` / `input_actions.json`. Supports mouse buttons (`action0`, `action1`, `action2`) as well as scroll wheel events (`wheelUp`, `wheelDown`):
 
 ```json
 "propTriggerEventLinks":[
     ["triggerId", "triggerInput", "inputAction"],
     
-    // Left click on steering wheel button increases cruise speed
+    // Steering wheel cruise control
     ["cruisecontrol_+", "action0", "cruisecontrol_+"],
+    ["cruisecontrol_-", "action0", "cruisecontrol_-"],
+    
+    // Steering wheel audio & nav controls
+    ["info_volUp",    "action0", "info_volUp"],
+    ["info_volDown",  "action0", "info_volDown"],
+    ["info_prev",     "action0", "info_prev"],
+    ["info_next",     "action0", "info_next"],
+    ["info_mute",     "action0", "info_mute"],
+    ["info_voiceNav", "action0", "info_voiceNav"],
 
-    // Mouse Middle Click toggles mute
-    ["info_volume_knob", "action2", "c6g3_infotainment:info_mute"],
-
-    // Mouse Wheel Up / Down increments / decrements volume
-    ["info_volume_knob", "wheelUp", "c6g3_infotainment:info_volUp"],
-    ["info_volume_knob", "wheelDown", "c6g3_infotainment:info_voDown"],
+    // Rotary volume knob with wheel & click actions
+    ["info_volume_knob", "action0",   "info_mute"],
+    ["info_volume_knob", "wheelUp",   "info_volUp"],
+    ["info_volume_knob", "wheelDown", "info_volDown"]
 ],
 ```
 
 ---
 
-## BeamNG v0.39+ Compatibility
+## Action Definition Example (`interaction.json` / `input_actions.json`)
 
-- **Screen-Space Crosshair Target Bubble:** Projects 3D trigger bounding boxes into screen space and emits the `vehicleTriggerCrosshairTarget` stream for seamless 0.39+ crosshair bubble placement.
-- **Automatic Icon Resolution:** Triggers automatically resolve suitable icons (`soundLoud`, `soundQuiet`, `soundOff`, `nextTrack`, `prevTrack`, `road`, `hazardLights`, `doorHandle`, `cruiseEnable`, `differentialMiddleLocked`, `mouseLMB`, `mouseRMB`, `mouseMMB`, `mouseWheel`) or use explicit `icon` fields specified on actions or triggers.
-- **Keybindings Legend:** Integrates with `ui_bindingsLegend` to display action labels, icons, and keyboard/mouse shortcut badges.
+Define your actions in `vehicle_name.interaction.json` or `input_actions.json`:
+
+```json
+{
+  "info_volUp":    { "order": 48, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeUp(0.02)",   "title": "Infotainment Volume Up",        "desc": "Increases infotainment volume by 2%" },
+  "info_volDown":  { "order": 49, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeDown(0.02)", "title": "Infotainment Volume Down",      "desc": "Decreases infotainment volume by 2%" },
+  "info_prev":     { "order": 50, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaPrevious()",  "title": "Infotainment Previous Track",   "desc": "Previous media track or image" },
+  "info_next":     { "order": 51, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaNext()",      "title": "Infotainment Next Track",       "desc": "Next media track or image" },
+  "info_mute":     { "order": 52, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleMute()",      "title": "Infotainment Toggle Mute",      "desc": "Toggles infotainment mute" },
+  "info_voiceNav": { "order": 53, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleVoiceNav()", "title": "Toggle Voice Navigation",        "desc": "Toggles navigation voice guidance on or off" }
+}
+```
