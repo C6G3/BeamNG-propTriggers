@@ -277,9 +277,84 @@ local function formatActionTitle(rawTitle)
     return str
 end
 
+local function resolveActionIcon(action, actionName, trg, actionKey)
+    if action and action.icon and type(action.icon) == "string" and action.icon ~= "" then
+        return action.icon
+    end
+    if trg and trg.icon and type(trg.icon) == "string" and trg.icon ~= "" then
+        return trg.icon
+    end
+
+    local text = string.lower(tostring(actionName or "") .. " " .. tostring(trg and trg.id or "") .. " " .. tostring(action and action.title or ""))
+
+    -- Infotainment / Audio controls
+    if text:find("volup") or text:find("vol_up") or text:find("volume%s*up") or text:find("volumeplus") or text:find("volume_plus") or text:find("volume%+") then
+        return "soundLoud"
+    end
+    if text:find("voldown") or text:find("vo_down") or text:find("vodown") or text:find("volume%s*down") or text:find("volumeminus") or text:find("volume_minus") or text:find("volume%-") then
+        return "soundQuiet"
+    end
+    if text:find("mute") or text:find("soundoff") then
+        return "soundOff"
+    end
+    if text:find("next") or text:find("forward") or text:find("skip_next") then
+        return "nextTrack"
+    end
+    if text:find("prev") or text:find("rewind") or text:find("skip_prev") or text:find("back_track") then
+        return "prevTrack"
+    end
+    if text:find("play") or text:find("pause") then
+        return "playPause"
+    end
+    if text:find("music") or text:find("audio") or text:find("song") then
+        return "music"
+    end
+
+    -- Navigation / Voice
+    if text:find("voicenav") or text:find("voice_nav") or text:find("voice") then
+        return "road"
+    end
+    if text:find("nav") or text:find("gps") or text:find("map") or text:find("route") then
+        return "steeringWheelSporty"
+    end
+
+    -- Vehicle Controls
+    if text:find("hazard") then
+        return "hazardLights"
+    end
+    if text:find("light") or text:find("beam") or text:find("lamp") then
+        return "lightGarageG11"
+    end
+    if text:find("door") then
+        return "doorHandle"
+    end
+    if text:find("cruise") or text:find("cc") then
+        return "cruiseEnable"
+    end
+    if text:find("diff") or text:find("differential") then
+        return "differentialMiddleLocked"
+    end
+    if text:find("steer") then
+        return "steeringWheelCommon"
+    end
+
+    -- Mouse and control fallbacks
+    if actionKey == "action0" or actionKey == "leftClick" then
+        return "mouseLMB"
+    elseif actionKey == "action1" or actionKey == "rightClick" then
+        return "mouseRMB"
+    elseif actionKey == "action2" or actionKey == "middleClick" then
+        return "mouseMMB"
+    elseif actionKey == "wheelUp" or actionKey == "wheelDown" or actionKey == "wheel" then
+        return "mouseWheel"
+    end
+
+    return "mouseLMB"
+end
+
 local lastPropTriggerCrosshairSent = false
 
-local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerColor, labelPlacement, hoveredTriggerName)
+local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerColor, labelPlacement, hoveredTriggerName, actionIcons, triggerIcon)
     local function roundCoord(v)
         if not v or type(v) ~= "number" then return nil end
         return math.floor(v * 10000 + 0.5) / 10000
@@ -290,6 +365,10 @@ local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerCo
     local action0 = actionTitles and actionTitles.action0 and (type(_tr) == "function" and _tr(actionTitles.action0) or actionTitles.action0) or nil
     local action1 = actionTitles and actionTitles.action1 and (type(_tr) == "function" and _tr(actionTitles.action1) or actionTitles.action1) or nil
     local action2 = actionTitles and actionTitles.action2 and (type(_tr) == "function" and _tr(actionTitles.action2) or actionTitles.action2) or nil
+    local action0Icon = actionIcons and actionIcons.action0 or nil
+    local action1Icon = actionIcons and actionIcons.action1 or nil
+    local action2Icon = actionIcons and actionIcons.action2 or nil
+    local primaryIcon = triggerIcon or action0Icon or (actionIcons and next(actionIcons) and select(2, next(actionIcons))) or nil
     local colorR = triggerColor and triggerColor.r or 0.235
     local colorG = triggerColor and triggerColor.g or 0.396
     local colorB = triggerColor and triggerColor.b or 1.0
@@ -312,6 +391,17 @@ local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerCo
         action0 = action0,
         action1 = action1,
         action2 = action2,
+        action0Icon = action0Icon,
+        action1Icon = action1Icon,
+        action2Icon = action2Icon,
+        action0_icon = action0Icon,
+        action1_icon = action1Icon,
+        action2_icon = action2Icon,
+        icon0 = action0Icon,
+        icon1 = action1Icon,
+        icon2 = action2Icon,
+        icon = primaryIcon,
+        actionIcons = actionIcons,
         colorR = colorR,
         colorG = colorG,
         colorB = colorB,
@@ -418,6 +508,73 @@ local function col(row, name, defaultIdx)
     return row[defaultIdx]
 end
 
+local function extractTargetPropList(raw, out)
+    out = out or {}
+    if not raw then return out end
+    if type(raw) == "string" then
+        if raw:find("[,;|]") then
+            for item in raw:gmatch("[^,;|]+") do
+                local trimmed = item:match("^%s*(.-)%s*$")
+                if trimmed and trimmed ~= "" then
+                    table.insert(out, trimmed)
+                end
+            end
+        else
+            local trimmed = raw:match("^%s*(.-)%s*$")
+            if trimmed and trimmed ~= "" then
+                table.insert(out, trimmed)
+            end
+        end
+    elseif type(raw) == "table" then
+        local n = #raw
+        if n > 0 then
+            for i = 1, n do
+                extractTargetPropList(raw[i], out)
+            end
+        else
+            for _, v in pairs(raw) do
+                extractTargetPropList(v, out)
+            end
+        end
+    end
+    return out
+end
+
+local function findAvailableProp(beObj, vData, targetProps)
+    if not targetProps or #targetProps == 0 then return nil, nil, nil end
+    if not vData or not vData.vdata or not vData.vdata.props then return nil, nil, nil end
+
+    for _, candidate in ipairs(targetProps) do
+        for _, prop in pairs(vData.vdata.props) do
+            if prop and (prop.mesh == candidate or prop.name == candidate) then
+                local pid = prop.pid
+                if pid ~= nil then
+                    if beObj then
+                        local pObj = beObj:getProp(pid)
+                        if pObj then
+                            return pid, pObj, prop
+                        end
+                    else
+                        return pid, nil, prop
+                    end
+                end
+            end
+        end
+    end
+
+    if beObj then
+        for _, candidate in ipairs(targetProps) do
+            for _, prop in pairs(vData.vdata.props) do
+                if prop and (prop.mesh == candidate or prop.name == candidate) then
+                    return prop.pid, nil, prop
+                end
+            end
+        end
+    end
+
+    return nil, nil, nil
+end
+
 local function parseTriggersTable(vehId, triggersTable, isTriggers2)
     local vData = core_vehicle_manager.getVehicleData(vehId)
     for _, row in pairs(triggersTable) do
@@ -452,7 +609,9 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                 local idY   = getNodeId(vData, col(row, "idY",   -1))
 
                 local triggerId  = col(row, "id", 1) or col(row, "name", 1)
-                local targetProp = col(row, "targetProp", 2)
+                local rawTargetProp = col(row, "targetProp", 2)
+                local targetProps = extractTargetPropList(rawTargetProp)
+                local firstTargetProp = targetProps[1] or (type(rawTargetProp) == "string" and rawTargetProp or nil)
 
                 if triggerId and triggerId ~= "id" and triggerId ~= "name" then
                     table.insert(triggersByVeh[vehId], {
@@ -464,9 +623,12 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                         halfSize    = szvec * 0.5,
                         triggerType = col(row, "type", 3) or "box",
                         id          = triggerId,
-                        targetProp  = targetProp,
+                        targetProp  = firstTargetProp,
+                        targetProps = targetProps,
+                        rawTargetProp = rawTargetProp,
                         action      = col(row, "action", 7) or "",
                         meshName    = col(row, "meshName", 5),
+                        icon        = col(row, "icon", -1),
                         alpha       = 0,
                         isTriggers2 = isTriggers2,
                     })
@@ -631,12 +793,25 @@ local function loadMeshTriggersOBJ(vehId)
     local vehDir = vData.dir or vData.vehicleDirectory
     if not vehDir then return end
     
+    local beObj = be:getObjectByID(vehId)
     for _, trg in ipairs(triggers) do
-        if trg.targetProp and trg.targetProp ~= "" then
+        if trg.targetProps and #trg.targetProps > 0 then
+            local pid, pObj, prop = findAvailableProp(beObj, vData, trg.targetProps)
+            if pid ~= nil and prop then
+                trg._targetPropId = pid
+                trg._activeTargetProp = prop.mesh or prop.name
+                if not trg.meshName or trg.meshName == "" then
+                    trg.meshName = prop.mesh
+                end
+            else
+                log('D', logTag, "Trigger " .. tostring(trg.id) .. " targetProps not found in vehicle props!")
+            end
+        elseif trg.targetProp and trg.targetProp ~= "" then
             if vData.vdata.props then
                 for _, prop in pairs(vData.vdata.props) do
-                    if prop.mesh == trg.targetProp then
+                    if prop.mesh == trg.targetProp or prop.name == trg.targetProp then
                         trg._targetPropId = prop.pid
+                        trg._activeTargetProp = prop.mesh
                         if not trg.meshName or trg.meshName == "" then
                             trg.meshName = prop.mesh
                         end
@@ -780,9 +955,24 @@ local function onPreRender(dt)
 
 
 
-                if trg._targetPropId then
-                    local propObj = beObj:getProp(trg._targetPropId)
-                    if not propObj then goto skip_trg end
+                local pid = trg._targetPropId
+                local propObj = pid and beObj:getProp(pid) or nil
+
+                -- Dynamic fallback: if propObj is missing, re-resolve across candidate targetProps
+                if not propObj and trg.targetProps and #trg.targetProps > 0 then
+                    local newPid, newPropObj, prop = findAvailableProp(beObj, vData, trg.targetProps)
+                    if newPid and prop then
+                        trg._targetPropId = newPid
+                        trg._activeTargetProp = prop.mesh or prop.name
+                        if not trg.meshName or trg.meshName == "" then
+                            trg.meshName = prop.mesh
+                        end
+                        pid = newPid
+                        propObj = newPropObj or beObj:getProp(newPid)
+                    end
+                end
+
+                if propObj then
                     local worldMat = propObj:getLiveTransformWorld()
                     
                     local tempMat = MatrixF(true)
@@ -797,7 +987,7 @@ local function onPreRender(dt)
                     
                     local baseCenter = worldMat:getColumn(3) + vec3(currentRefPos)
                     center = baseCenter + ax*trg.baseTrans.x + ay*trg.baseTrans.y + az*trg.baseTrans.z
-                elseif trg.targetProp and trg.targetProp ~= "" then
+                elseif (trg.targetProps and #trg.targetProps > 0) or (trg.targetProp and trg.targetProp ~= "") then
                     goto skip_trg
                 else
                     local rawPRef = beObj:getNodePosition(trg.idRef)
@@ -918,7 +1108,9 @@ local function onPreRender(dt)
                 local tr, tg, tb = 0.35, 0.51, 0.76
                 local targetAlpha = 0.28 * proximity
 
-                if isHovered and im.IsMouseDown(0) then
+                local mouseWheel = im.GetIO().MouseWheel or 0
+                local isMouseDown = im.IsMouseDown(0) or im.IsMouseDown(1) or im.IsMouseDown(2) or mouseWheel ~= 0
+                if isHovered and isMouseDown then
                     tr, tg, tb, targetAlpha = 0.10, 1.00, 0.40, 1.00
                 elseif isHovered then
                     tr, tg, tb, targetAlpha = 0.10, 0.75, 0.30, 0.28
@@ -973,10 +1165,11 @@ local function onPreRender(dt)
                 local vehLinks = propTriggerLinksDict[vehId]
                 local vData = extensions.core_vehicle_manager.getVehicleData(vehId)
                 local actionTitles = {}
+                local actionIcons = {}
                 local actionsList = {}
 
-                for actionIdx = 0, 2 do
-                    local actionKey = "action" .. tostring(actionIdx)
+                local actionKeys = { "action0", "action1", "action2", "wheelUp", "wheelDown" }
+                for _, actionKey in ipairs(actionKeys) do
                     local links = vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId][actionKey]
                     local lnk = type(links) == "table" and links[1] or nil
                     if lnk and lnk.inputAction then
@@ -994,6 +1187,9 @@ local function onPreRender(dt)
                         local title = formatActionTitle(rawTitle)
                         actionTitles[actionKey] = title
 
+                        local actionIcon = resolveActionIcon(action, actionName, hoveredTrgObj, actionKey)
+                        actionIcons[actionKey] = actionIcon
+
                         local actionStr = actionName
                         if action and action.vehicle and lnk.namespace == 'vehicle' then
                             actionStr = action.vehicle .. '__' .. actionStr
@@ -1005,35 +1201,45 @@ local function onPreRender(dt)
                             bindingDev, actionBinding = findKeyboardBindingForAction(actionStr, desiredInverted)
                         end
 
-                        if actionBinding and bindingDev then
-                            table.insert(actionsList, {
-                                action = actionStr,
-                                label = title,
-                                bindings = {{ device = bindingDev, control = actionBinding.control }}
-                            })
-                        elseif not checkIs039OrHigher() then
-                            -- Legacy (<0.39): show in top-right legend even without key binding
-                            local actionItem = {}
-                            if type(action) == 'table' then
-                                for k, v in pairs(action) do actionItem[k] = v end
-                            end
-                            actionItem.action = actionStr
-                            actionItem.label = title
-                            table.insert(actionsList, actionItem)
+                        local defaultMouseControl = "button0"
+                        if actionKey == "action1" then
+                            defaultMouseControl = "button1"
+                        elseif actionKey == "action2" then
+                            defaultMouseControl = "button2"
+                        elseif actionKey == "wheelUp" then
+                            defaultMouseControl = "wheelup"
+                        elseif actionKey == "wheelDown" then
+                            defaultMouseControl = "wheeldown"
                         end
+
+                        local bindingsData = nil
+                        if actionBinding and bindingDev then
+                            bindingsData = {{ device = bindingDev, control = actionBinding.control }}
+                        else
+                            bindingsData = {{ device = "mouse0", control = defaultMouseControl }}
+                        end
+
+                        table.insert(actionsList, {
+                            action = actionStr,
+                            label = title,
+                            icon = actionIcon,
+                            bindings = bindingsData
+                        })
                     end
                 end
 
                 if not next(actionTitles) then
                     local rawFallback = hoveredTrgObj.action and hoveredTrgObj.action ~= "" and hoveredTrgObj.action or hoveredId
                     local fallbackTitle = formatActionTitle(rawFallback)
+                    local fallbackIcon = resolveActionIcon(nil, hoveredTrgObj.action, hoveredTrgObj, "action0")
                     actionTitles["action0"] = fallbackTitle
-                    if not checkIs039OrHigher() then
-                        table.insert(actionsList, {
-                            action = hoveredId,
-                            label = fallbackTitle
-                        })
-                    end
+                    actionIcons["action0"] = fallbackIcon
+                    table.insert(actionsList, {
+                        action = hoveredId,
+                        label = fallbackTitle,
+                        icon = fallbackIcon,
+                        bindings = {{ device = "mouse0", control = "button0" }}
+                    })
                 end
 
                 if #actionsList > 0 then
@@ -1056,6 +1262,8 @@ local function onPreRender(dt)
                             x = screenPos.x,
                             y = screenPos.y,
                             actionTitles = actionTitles,
+                            actionIcons = actionIcons,
+                            triggerIcon = hoveredTrgObj.icon,
                             color = {r=0.235, g=0.396, b=1.0, a=0.75},
                             labelPlacement = labelPlacement,
                             name = hoveredId
@@ -1068,12 +1276,15 @@ local function onPreRender(dt)
                 propTriggers_globalActionsToDraw = actionsListToDraw
             end
 
-            -- ── Click handling ──
+            -- ── Click and Scroll handling ──
             if hoveredId and cursorVisible then
+                -- Left Mouse Button (action0)
                 if im.IsMouseClicked(0) then
                     for _, trg in ipairs(triggers) do
                         if trg.id == hoveredId then
                             firePropTriggerEvent(vehId, trg.id, 'action0', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'leftClick', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseLeft', 1)
                             break
                         end
                     end
@@ -1087,6 +1298,86 @@ local function onPreRender(dt)
                                 beObj:queueLuaCommand(string.format('%s', trg.action))
                             end
                             firePropTriggerEvent(vehId, trg.id, 'action0', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'leftClick', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseLeft', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Right Mouse Button (action1)
+                if im.IsMouseClicked(1) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action1', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'rightClick', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseRight', 1)
+                            break
+                        end
+                    end
+                end
+
+                if im.IsMouseReleased(1) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action1', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'rightClick', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseRight', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Middle Mouse Button (action2)
+                if im.IsMouseClicked(2) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action2', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'middleClick', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseMiddle', 1)
+                            break
+                        end
+                    end
+                end
+
+                if im.IsMouseReleased(2) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action2', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'middleClick', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseMiddle', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Mouse Wheel Up / Down
+                local mouseWheel = im.GetIO().MouseWheel or 0
+                if mouseWheel > 0 then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'wheelUp', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel_up', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseWheelUp', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheelUp', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel_up', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseWheelUp', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', 0)
+                            break
+                        end
+                    end
+                elseif mouseWheel < 0 then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'wheelDown', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel_down', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseWheelDown', 1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', -1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheelDown', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel_down', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'mouseWheelDown', 0)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', 0)
                             break
                         end
                     end
@@ -1108,7 +1399,9 @@ local function onPreRender(dt)
                 propTriggers_targetToPublish.actionTitles,
                 propTriggers_targetToPublish.color,
                 propTriggers_targetToPublish.labelPlacement,
-                propTriggers_targetToPublish.name
+                propTriggers_targetToPublish.name,
+                propTriggers_targetToPublish.actionIcons,
+                propTriggers_targetToPublish.triggerIcon
             )
         else
             clearPropTriggerCrosshairTargetStream()
