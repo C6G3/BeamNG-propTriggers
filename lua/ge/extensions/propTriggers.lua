@@ -1,4 +1,4 @@
--- This Source Code Form is subject to the terms of the MIT License.
+﻿-- This Source Code Form is subject to the terms of the MIT License.
 -- Copyright (c) 2026 
 -- Author C6g3. 
 --
@@ -15,8 +15,33 @@ local cursorVisible = true
 local initializedVehicles = false
 local prevHoveredPropTrigger = { vehId = nil, triggerId = nil }
 
+local is039OrHigher = nil
+local function checkIs039OrHigher()
+    if is039OrHigher ~= nil then return is039OrHigher end
+    local ver = beamng_version or beamng_versiond or beamng_versionb
+    if type(ver) == "string" then
+        local major, minor = string.match(ver, "^(%d+)%.(%d+)")
+        if major and minor then
+            local majNum = tonumber(major) or 0
+            local minNum = tonumber(minor) or 0
+            if majNum > 0 or minNum >= 39 then
+                is039OrHigher = true
+                return true
+            else
+                is039OrHigher = false
+                return false
+            end
+        end
+    end
+    if core_vehicle_triggerLabelPlacement or (extensions and extensions.core_vehicle_triggerLabelPlacement) then
+        is039OrHigher = true
+        return true
+    end
+    is039OrHigher = false
+    return false
+end
+
 -- Find the first keyboard binding for a given action string, matching inversion state.
--- Mirrors the same function in core/vehicleTriggers.lua.
 local function findKeyboardBindingForAction(actionStr, desiredInverted)
     for _, device in ipairs(core_input_bindings and core_input_bindings.bindings or {}) do
         local contents = device.contents or {}
@@ -27,6 +52,296 @@ local function findKeyboardBindingForAction(actionStr, desiredInverted)
                 end
             end
         end
+    end
+end
+
+local function isControllerDeviceType(deviceType)
+    return deviceType ~= "keyboard" and deviceType ~= "mouse"
+end
+
+-- Preferred binding finder for 0.39+ (matching core/vehicleTriggers.lua)
+local function findBindingForAction(actionStr, desiredInverted)
+    local preferredPad = core_camera and core_camera.getLastFilter and core_camera.getLastFilter() == FILTER_PAD
+    local recentDevices = core_input_bindings and core_input_bindings.getRecentDevices and core_input_bindings.getRecentDevices() or {}
+    local recentRank = {}
+    for i, devname in ipairs(recentDevices) do
+        recentRank[devname] = i
+    end
+
+    local bestDeviceName, bestBinding, bestScore = nil, nil, -math.huge
+
+    for _, device in ipairs(core_input_bindings and core_input_bindings.bindings or {}) do
+        local contents = device.contents or {}
+        local deviceType = contents.devicetype
+        for _, b in ipairs(contents.bindings or {}) do
+            if b.action == actionStr and ((b.isInverted or false) == (desiredInverted or false)) then
+                local score = 0
+                local isController = isControllerDeviceType(deviceType)
+                if preferredPad then
+                    if isController then score = score + 100 end
+                else
+                    if deviceType == "keyboard" then
+                        score = score + 100
+                    elseif deviceType == "mouse" then
+                        score = score + 80
+                    end
+                end
+
+                local rank = recentRank[device.devname]
+                if rank then
+                    score = score + math.max(0, 50 - rank)
+                end
+
+                if score > bestScore then
+                    bestScore = score
+                    bestDeviceName = device.devname
+                    bestBinding = b
+                end
+            end
+        end
+    end
+
+    return bestDeviceName, bestBinding
+end
+
+-- ÔöÇÔöÇ 0.39 Screen Projection & Bubble Placement ÔöÇÔöÇ
+local w2sCamRight = vec3()
+local w2sCamForward = vec3()
+local w2sCamUp = vec3()
+local w2sToPoint = vec3()
+local w2sContextValid = false
+local w2sContextCamPos = nil
+local w2sContextHalfTan = 0
+local w2sContextAspect = 0
+
+local function rotateVecByQuatInPlace(outVec, quatValue, inX, inY, inZ)
+    local qx, qy, qz, qw = quatValue.x, quatValue.y, quatValue.z, quatValue.w
+    local tx = 2 * (qy * inZ - qz * inY)
+    local ty = 2 * (qz * inX - qx * inZ)
+    local tz = 2 * (qx * inY - qy * inX)
+    outVec:set(
+        inX - qw * tx + (qy * tz - qz * ty),
+        inY - qw * ty + (qz * tx - qx * tz),
+        inZ - qw * tz + (qx * ty - qy * tx)
+    )
+end
+
+local function updateWorldPosToScreenContext()
+    w2sContextValid = false
+    if not core_camera or not core_camera.getPosition or not core_camera.getQuat then return false end
+    local camPos = core_camera.getPosition()
+    local camRot = core_camera.getQuat()
+    if not camPos or not camRot then return false end
+
+    local canvas = scenetree.findObject("Canvas")
+    if not canvas or not canvas.getWindowClientSizeXY then return false end
+    local clientW, clientH = canvas:getWindowClientSizeXY()
+    if not clientW or not clientH or clientW <= 0 or clientH <= 0 then return false end
+
+    local fovRad = core_camera.getFovRad and core_camera.getFovRad() or nil
+    if not fovRad or fovRad <= 0 then return false end
+    local aspect = clientW / clientH
+    if aspect <= 0 then return false end
+
+    local halfTan = math.tan(fovRad * 0.5)
+    if halfTan == 0 then return false end
+
+    rotateVecByQuatInPlace(w2sCamRight, camRot, 1, 0, 0)
+    rotateVecByQuatInPlace(w2sCamForward, camRot, 0, 1, 0)
+    rotateVecByQuatInPlace(w2sCamUp, camRot, 0, 0, 1)
+
+    w2sContextCamPos = camPos
+    w2sContextHalfTan = halfTan
+    w2sContextAspect = aspect
+    w2sContextValid = true
+    return true
+end
+
+local function worldPosToScreenPercent01(worldPos, out)
+    if not worldPos then return nil end
+    if extensions.core_vehicleTriggers and extensions.core_vehicleTriggers.worldPosToScreenPercent01 then
+        return extensions.core_vehicleTriggers.worldPosToScreenPercent01(worldPos, out)
+    end
+    if not w2sContextValid and not updateWorldPosToScreenContext() then return nil end
+
+    w2sToPoint:setSub2(worldPos, w2sContextCamPos)
+
+    local depth = w2sToPoint:dot(w2sCamForward)
+    if not depth or depth <= 0 then return nil end
+
+    local nx = w2sToPoint:dot(w2sCamRight) / (depth * w2sContextHalfTan * w2sContextAspect)
+    local ny = w2sToPoint:dot(w2sCamUp) / (depth * w2sContextHalfTan)
+
+    out = out or {}
+    out.x = (nx + 1) * 0.5
+    out.y = (1 - ny) * 0.5
+    return out
+end
+
+local LABEL_OFFSET_REM = "0.6em"
+local function clamp01(v) return math.max(0, math.min(1, v)) end
+
+local function computeLabelPlacementForPropTrigger(centerWorld, ax, ay, az, hx, hy, hz, screenPos)
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local hasAnyCorner = false
+
+    local tmpWorld = vec3()
+    local tmpScreen = {}
+    for sx = -1, 1, 2 do
+        for sy = -1, 1, 2 do
+            for sz = -1, 1, 2 do
+                tmpWorld:setAddScaled(centerWorld, ax, hx * sx)
+                tmpWorld:setAddScaled(tmpWorld, ay, hy * sy)
+                tmpWorld:setAddScaled(tmpWorld, az, hz * sz)
+                local sp = worldPosToScreenPercent01(tmpWorld, tmpScreen)
+                if sp and type(sp.x) == "number" and type(sp.y) == "number" then
+                    hasAnyCorner = true
+                    minX = math.min(minX, sp.x)
+                    maxX = math.max(maxX, sp.x)
+                    minY = math.min(minY, sp.y)
+                    maxY = math.max(maxY, sp.y)
+                end
+            end
+        end
+    end
+
+    local bounds = {}
+    if hasAnyCorner then
+        bounds.minX = minX
+        bounds.maxX = maxX
+        bounds.minY = minY
+        bounds.maxY = maxY
+        bounds.centerX = (minX + maxX) * 0.5
+        bounds.centerY = (minY + maxY) * 0.5
+    elseif screenPos then
+        local x = clamp01(screenPos.x)
+        local y = clamp01(screenPos.y)
+        bounds.minX = x; bounds.maxX = x
+        bounds.minY = y; bounds.maxY = y
+        bounds.centerX = x; bounds.centerY = y
+    else
+        return nil
+    end
+
+    local side = "right"
+    local centerMin = 0.15
+    local centerMax = 0.85
+    local insideCenter70 = bounds.minX >= centerMin and bounds.maxX <= centerMax and bounds.minY >= centerMin and bounds.maxY <= centerMax
+    if insideCenter70 then
+        side = "bottom"
+    else
+        local rightSpace = 1 - bounds.maxX
+        local leftSpace = bounds.minX
+        local topSpace = bounds.minY
+        local bottomSpace = 1 - bounds.maxY
+        local bestSpace = rightSpace
+        if leftSpace > bestSpace then bestSpace = leftSpace; side = "left" end
+        if topSpace > bestSpace then bestSpace = topSpace; side = "top" end
+        if bottomSpace > bestSpace then side = "bottom" end
+    end
+
+    local labelX, labelY, labelTx, labelTy
+    if side == "right" then
+        labelX = bounds.maxX; labelY = bounds.centerY; labelTx = LABEL_OFFSET_REM; labelTy = "-50%"
+    elseif side == "left" then
+        labelX = bounds.minX; labelY = bounds.centerY; labelTx = "calc(-100% - " .. LABEL_OFFSET_REM .. ")"; labelTy = "-50%"
+    elseif side == "top" then
+        labelX = bounds.centerX; labelY = bounds.minY; labelTx = "-50%"; labelTy = "calc(-100% - " .. LABEL_OFFSET_REM .. ")"
+    else
+        labelX = bounds.centerX; labelY = bounds.maxY; labelTx = "-50%"; labelTy = LABEL_OFFSET_REM
+    end
+
+    return {
+        labelX = clamp01(labelX),
+        labelY = clamp01(labelY),
+        labelTx = labelTx,
+        labelTy = labelTy,
+        labelSide = side,
+        bounds = bounds
+    }
+end
+
+local function formatActionTitle(rawTitle)
+    if not rawTitle or rawTitle == "" then return "" end
+    if type(_tr) == "function" then
+        local translated = _tr(rawTitle)
+        if translated and translated ~= "" and translated ~= rawTitle then return translated end
+    end
+    local str = tostring(rawTitle)
+    str = str:gsub("^ui%.inputActions%.vehicle%.", ""):gsub("^ui%.inputActions%.", ""):gsub("%.title$", "")
+    str = str:gsub("_", " ")
+    if str:match("^%l") then
+        str = str:gsub("(%a)([%w_']*)", function(first, rest) return first:upper() .. rest:lower() end)
+    end
+    return str
+end
+
+local lastPropTriggerCrosshairSent = false
+
+local function setPropTriggerCrosshairTargetStream(x, y, actionTitles, triggerColor, labelPlacement, hoveredTriggerName)
+    local function roundCoord(v)
+        if not v or type(v) ~= "number" then return nil end
+        return math.floor(v * 10000 + 0.5) / 10000
+    end
+
+    local xRounded = roundCoord(x)
+    local yRounded = roundCoord(y)
+    local action0 = actionTitles and actionTitles.action0 and (type(_tr) == "function" and _tr(actionTitles.action0) or actionTitles.action0) or nil
+    local action1 = actionTitles and actionTitles.action1 and (type(_tr) == "function" and _tr(actionTitles.action1) or actionTitles.action1) or nil
+    local action2 = actionTitles and actionTitles.action2 and (type(_tr) == "function" and _tr(actionTitles.action2) or actionTitles.action2) or nil
+    local colorR = triggerColor and triggerColor.r or 0.235
+    local colorG = triggerColor and triggerColor.g or 0.396
+    local colorB = triggerColor and triggerColor.b or 1.0
+    local colorA = triggerColor and triggerColor.a or 0.75
+    local labelX = labelPlacement and labelPlacement.labelX or xRounded
+    local labelY = labelPlacement and labelPlacement.labelY or yRounded
+    local labelTx = labelPlacement and labelPlacement.labelTx or "0.6em"
+    local labelTy = labelPlacement and labelPlacement.labelTy or "-50%"
+    local labelSide = labelPlacement and labelPlacement.labelSide or "right"
+    local boundsMinX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.minX or xRounded
+    local boundsMaxX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.maxX or xRounded
+    local boundsMinY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.minY or yRounded
+    local boundsMaxY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.maxY or yRounded
+    local boundsCenterX = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.centerX or xRounded
+    local boundsCenterY = labelPlacement and labelPlacement.bounds and labelPlacement.bounds.centerY or yRounded
+
+    local payload = {
+        x = xRounded,
+        y = yRounded,
+        action0 = action0,
+        action1 = action1,
+        action2 = action2,
+        colorR = colorR,
+        colorG = colorG,
+        colorB = colorB,
+        colorA = colorA,
+        hoveredTriggerName = hoveredTriggerName,
+        labelX = labelX,
+        labelY = labelY,
+        labelTx = labelTx,
+        labelTy = labelTy,
+        labelSide = labelSide,
+        boundsMinX = boundsMinX,
+        boundsMaxX = boundsMaxX,
+        boundsMinY = boundsMinY,
+        boundsMaxY = boundsMaxY,
+        boundsCenterX = boundsCenterX,
+        boundsCenterY = boundsCenterY,
+    }
+
+    if guihooks and guihooks.triggerStream then
+        guihooks.triggerStream("vehicleTriggerCrosshairTarget", payload)
+        lastPropTriggerCrosshairSent = true
+    end
+end
+
+local function clearPropTriggerCrosshairTargetStream()
+    if lastPropTriggerCrosshairSent then
+        if guihooks and guihooks.triggerStream then
+            guihooks.triggerStream("vehicleTriggerCrosshairTarget", {})
+        end
+        lastPropTriggerCrosshairSent = false
     end
 end
 
@@ -108,73 +423,60 @@ local function extractTargetPropList(raw, out, seen)
     seen = seen or {}
     if not raw then return out end
 
-    local function addCandidate(str)
-        if type(str) == "string" then
-            local trimmed = str:match("^%s*[\"']?(.-)[\"']?%s*$")
-            if trimmed and trimmed ~= "" then
-                local lowerKey = trimmed:lower()
-                if not seen[lowerKey] then
-                    seen[lowerKey] = true
-                    table.insert(out, trimmed)
-                end
+    if type(raw) == "table" then
+        for _, item in ipairs(raw) do
+            extractTargetPropList(item, out, seen)
+        end
+        for k, item in pairs(raw) do
+            if type(k) ~= "number" then
+                extractTargetPropList(item, out, seen)
             end
         end
-    end
-
-    local t = type(raw)
-    if t == "string" then
-        if raw:find("[,;|]") then
-            for item in raw:gmatch("[^,;|]+") do
-                addCandidate(item)
+    elseif type(raw) == "string" then
+        if raw:find("[,;]") then
+            for part in raw:gmatch("[^,;]+") do
+                extractTargetPropList(part, out, seen)
             end
         else
-            addCandidate(raw)
-        end
-    elseif t == "table" then
-        local n = #raw
-        if n > 0 then
-            for i = 1, n do
-                extractTargetPropList(raw[i], out, seen)
-            end
-        end
-        for k, v in pairs(raw) do
-            if type(k) == "string" then
-                local kLower = k:lower()
-                if kLower == "targetprop" or kLower == "targetprops" or kLower == "mesh" or kLower == "name" or kLower == "prop" then
-                    extractTargetPropList(v, out, seen)
-                elseif type(k) ~= "number" or (k < 1 or k > n) then
-                    if type(v) == "table" or type(v) == "string" then
-                        extractTargetPropList(v, out, seen)
-                    end
-                end
-            elseif type(k) == "number" and (k < 1 or k > n) then
-                extractTargetPropList(v, out, seen)
+            local clean = raw:match("^%s*(.-)%s*$")
+            if clean and clean ~= "" and clean ~= "targetProp" and clean ~= "targetProps" and not seen[clean:lower()] then
+                seen[clean:lower()] = true
+                table.insert(out, clean)
             end
         end
     end
     return out
 end
 
-local function findAvailableProp(vData, candidates)
-    if not candidates or #candidates == 0 then return nil, nil end
-    if not vData or not vData.vdata or not vData.vdata.props then return nil, nil end
+local function propMatchesCandidate(prop, candidate)
+    if not prop or not candidate or candidate == "" then return false end
+    local candLower = candidate:lower():gsub("%.dae$", ""):gsub("%.obj$", "")
+
+    local mesh = type(prop.mesh) == "string" and prop.mesh:lower():gsub("%.dae$", ""):gsub("%.obj$", "")
+    if mesh and mesh == candLower then return true end
+
+    local origMesh = type(prop.originalMesh) == "string" and prop.originalMesh:lower():gsub("%.dae$", ""):gsub("%.obj$", "")
+    if origMesh and origMesh == candLower then return true end
+
+    local name = type(prop.name) == "string" and prop.name:lower():gsub("%.dae$", ""):gsub("%.obj$", "")
+    if name and name == candLower then return true end
+
+    return false
+end
+
+local function findAvailableProp(beObj, vData, candidates)
+    if not vData or not vData.vdata or not vData.vdata.props or not candidates then return nil, nil, nil end
+    local props = vData.vdata.props
 
     for _, cand in ipairs(candidates) do
-        local candClean = cand:lower():match("^%s*[\"']?(.-)[\"']?%s*$")
-        local candBase = candClean:gsub("%.%w+$", "")
-        for k, prop in pairs(vData.vdata.props) do
-            if prop and not prop.disabled then
-                local pMesh = type(prop.mesh) == "string" and prop.mesh:lower():gsub("%.%w+$", "") or ""
-                local pOrig = type(prop.originalMesh) == "string" and prop.originalMesh:lower():gsub("%.%w+$", "") or ""
-                local pName = type(prop.name) == "string" and prop.name:lower():gsub("%.%w+$", "") or ""
-                if pMesh == candBase or pOrig == candBase or pName == candBase or prop.mesh == cand or prop.name == cand then
-                    local pid = prop.pid or (type(k) == "number" and k) or prop.id
-                    return pid, prop
-                end
+        for _, prop in pairs(props) do
+            if not prop.disabled and propMatchesCandidate(prop, cand) then
+                local pObj = beObj and prop.pid and beObj:getProp(prop.pid) or nil
+                return prop.pid, pObj, prop
             end
         end
     end
-    return nil, nil
+    return nil, nil, nil
 end
 
 local function parseTriggersTable(vehId, triggersTable, isTriggers2)
@@ -211,11 +513,13 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                 local idY   = getNodeId(vData, col(row, "idY",   -1))
 
                 local triggerId  = col(row, "id", 1) or col(row, "name", 1)
-                local rawTargetProp1 = col(row, "targetProps", -1)
-                local rawTargetProp2 = col(row, "targetProp", 2)
-                local targetProps = extractTargetPropList(rawTargetProp1)
-                if rawTargetProp2 then extractTargetPropList(rawTargetProp2, targetProps) end
-                local firstTargetProp = targetProps[1] or (type(rawTargetProp2) == "string" and rawTargetProp2 or (type(rawTargetProp1) == "string" and rawTargetProp1 or nil))
+                local rawTargetProps = col(row, "targetProps", -1)
+                local rawTargetProp  = col(row, "targetProp", 2)
+                local targetProps = extractTargetPropList(rawTargetProps)
+                if rawTargetProp and rawTargetProp ~= rawTargetProps then
+                    extractTargetPropList(rawTargetProp, targetProps)
+                end
+                local primaryTargetProp = targetProps[1] or (type(rawTargetProp) == "string" and rawTargetProp or nil)
 
                 if triggerId and triggerId ~= "id" and triggerId ~= "name" then
                     table.insert(triggersByVeh[vehId], {
@@ -227,7 +531,7 @@ local function parseTriggersTable(vehId, triggersTable, isTriggers2)
                         halfSize    = szvec * 0.5,
                         triggerType = col(row, "type", 3) or "box",
                         id          = triggerId,
-                        targetProp  = firstTargetProp,
+                        targetProp  = primaryTargetProp,
                         targetProps = targetProps,
                         action      = col(row, "action", 7) or "",
                         meshName    = col(row, "meshName", 5),
@@ -395,17 +699,18 @@ local function loadMeshTriggersOBJ(vehId)
     local vehDir = vData.dir or vData.vehicleDirectory
     if not vehDir then return end
     
+    local beObj = be:getObjectByID(vehId)
     for _, trg in ipairs(triggers) do
-        local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or (trg.targetProp and trg.targetProp ~= "" and { trg.targetProp } or nil)
+        local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or (trg.targetProp and { trg.targetProp } or nil)
         if candidates and #candidates > 0 then
-            local pid, prop = findAvailableProp(vData, candidates)
-            if pid ~= nil and prop then
+            local pid, _, matchedProp = findAvailableProp(beObj, vData, candidates)
+            if pid then
                 trg._targetPropId = pid
                 if not trg.meshName or trg.meshName == "" then
-                    trg.meshName = prop.mesh or prop.originalMesh
+                    trg.meshName = matchedProp and matchedProp.mesh or candidates[1]
                 end
             else
-                log('D', logTag, "Trigger " .. tostring(trg.id) .. " targetProp candidates not found in vehicle props!")
+                trg._targetPropId = nil
             end
         end
 
@@ -469,14 +774,14 @@ local function loadTriggersFromJBeam(vehId)
     loadMeshTriggersOBJ(vehId)
 end
 
+
+
 local function onVehicleSpawned(vehId)
     loadTriggersFromJBeam(vehId)
 end
 
 local function onVehicleResetted(vehId)
-    if vehId then
-        loadTriggersFromJBeam(vehId)
-    end
+    loadTriggersFromJBeam(vehId)
 end
 
 local function onVehicleDestroyed(vehId)
@@ -493,13 +798,23 @@ local function onCursorVisibilityChanged(visible)
 end
 
 local function onPreRender(dt)
-    if not cursorVisible then return end
+    if not cursorVisible then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
     local ray = getCameraMouseRay()
-    if not ray then return end
+    if not ray then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
     
     local propTriggers_globalActionsToDraw = nil
+    local propTriggers_targetToPublish = nil
     local im = ui_imgui
-    if im.GetIO().WantCaptureMouse then return end
+    if im.GetIO().WantCaptureMouse then
+        if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
+        return
+    end
 
     if not initializedVehicles then
         initializedVehicles = true
@@ -523,26 +838,27 @@ local function onPreRender(dt)
             if not currentRefPos then return end
 
             local vData = core_vehicle_manager.getVehicleData(vehId)
+            
+
+
             local hoveredId   = nil
             local closestDist = math.huge
 
             for _, trg in ipairs(triggers) do
                 local center, ax, ay, az
 
-                local pid = trg._targetPropId
-                local propObj = pid and beObj:getProp(pid) or nil
 
-                local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or (trg.targetProp and trg.targetProp ~= "" and { trg.targetProp } or nil)
-                if not propObj and candidates and #candidates > 0 then
-                    local newPid, prop = findAvailableProp(vData, candidates)
-                    if newPid then
-                        trg._targetPropId = newPid
-                        pid = newPid
-                        propObj = beObj:getProp(newPid)
+
+                if trg._targetPropId then
+                    local propObj = beObj:getProp(trg._targetPropId)
+                    if not propObj and trg.targetProps and #trg.targetProps > 0 then
+                        local pid, pO = findAvailableProp(beObj, vData, trg.targetProps)
+                        if pid then
+                            trg._targetPropId = pid
+                            propObj = pO or beObj:getProp(pid)
+                        end
                     end
-                end
-
-                if propObj then
+                    if not propObj then goto skip_trg end
                     local worldMat = propObj:getLiveTransformWorld()
                     
                     local tempMat = MatrixF(true)
@@ -558,7 +874,29 @@ local function onPreRender(dt)
                     local baseCenter = worldMat:getColumn(3) + vec3(currentRefPos)
                     center = baseCenter + ax*trg.baseTrans.x + ay*trg.baseTrans.y + az*trg.baseTrans.z
                 elseif (trg.targetProps and #trg.targetProps > 0) or (trg.targetProp and trg.targetProp ~= "") then
-                    goto skip_trg
+                    local candidates = (trg.targetProps and #trg.targetProps > 0) and trg.targetProps or { trg.targetProp }
+                    local pid, pO = findAvailableProp(beObj, vData, candidates)
+                    if pid then
+                        trg._targetPropId = pid
+                        local propObj = pO or beObj:getProp(pid)
+                        if propObj then
+                            local worldMat = propObj:getLiveTransformWorld()
+                            local tempMat = MatrixF(true)
+                            tempMat:setColumn(0, worldMat:getColumn(0))
+                            tempMat:setColumn(1, worldMat:getColumn(1))
+                            tempMat:setColumn(2, worldMat:getColumn(2))
+                            tempMat:mul(trg.baseRot)
+                            ax = tempMat:getColumn(0)
+                            ay = tempMat:getColumn(1)
+                            az = tempMat:getColumn(2)
+                            local baseCenter = worldMat:getColumn(3) + vec3(currentRefPos)
+                            center = baseCenter + ax*trg.baseTrans.x + ay*trg.baseTrans.y + az*trg.baseTrans.z
+                        else
+                            goto skip_trg
+                        end
+                    else
+                        goto skip_trg
+                    end
                 else
                     local rawPRef = beObj:getNodePosition(trg.idRef)
                     if not rawPRef then goto skip_trg end
@@ -646,8 +984,11 @@ local function onPreRender(dt)
                 trg._center = center
                 trg._ax = ax; trg._ay = ay; trg._az = az
 
+
+
                 ::skip_trg::
             end
+
 
             for _, trg in ipairs(triggers) do
                 if not trg._center then goto skip_draw end
@@ -714,16 +1055,30 @@ local function onPreRender(dt)
                 ::skip_draw::
             end
 
-            -- ── Show title + key binding legend on hover (like native triggers) ──
+            -- ÔöÇÔöÇ Show title + key binding legend / 0.39 bubble on hover ÔöÇÔöÇ
             local actionsListToDraw = nil
+            local hoveredTrgObj = nil
             if hoveredId then
+                for _, trg in ipairs(triggers) do
+                    if trg.id == hoveredId then
+                        hoveredTrgObj = trg
+                        break
+                    end
+                end
+            end
+
+            if hoveredId and hoveredTrgObj then
                 local vehLinks = propTriggerLinksDict[vehId]
-                if vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId]['action0'] then
-                    local lnk = vehLinks[hoveredId]['action0'][1]
-                    if lnk then
-                        local vData = extensions.core_vehicle_manager.getVehicleData(vehId)
+                local vData = extensions.core_vehicle_manager.getVehicleData(vehId)
+                local actionTitles = {}
+                local actionsList = {}
+
+                for actionIdx = 0, 2 do
+                    local actionKey = "action" .. tostring(actionIdx)
+                    local links = vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId][actionKey]
+                    local lnk = type(links) == "table" and links[1] or nil
+                    if lnk and lnk.inputAction then
                         local actionName = lnk.inputAction
-                        
                         local action = nil
                         if vData and vData.vdata and vData.vdata.inputActions then
                             action = vData.vdata.inputActions[actionName]
@@ -733,37 +1088,85 @@ local function onPreRender(dt)
                             if activeActions then action = activeActions[actionName] end
                         end
 
-                        if action then
-                            local actionStr = actionName
-                            if lnk.namespace == 'vehicle' and action.vehicle then
-                                actionStr = action.vehicle .. '__' .. actionStr
-                            end
+                        local rawTitle = action and action.title or actionName
+                        local title = formatActionTitle(rawTitle)
+                        actionTitles[actionKey] = title
 
-                            local desiredInverted = lnk.isInverted == true
-                            local keyboardDev, keyboardBinding = findKeyboardBindingForAction(actionStr, desiredInverted)
+                        local actionStr = actionName
+                        if action and action.vehicle and lnk.namespace == 'vehicle' then
+                            actionStr = action.vehicle .. '__' .. actionStr
+                        end
 
+                        local desiredInverted = lnk.isInverted == true
+                        local bindingDev, actionBinding = findBindingForAction(actionStr, desiredInverted)
+                        if not actionBinding then
+                            bindingDev, actionBinding = findKeyboardBindingForAction(actionStr, desiredInverted)
+                        end
+
+                        if actionBinding and bindingDev then
+                            table.insert(actionsList, {
+                                action = actionStr,
+                                label = title,
+                                bindings = {{ device = bindingDev, control = actionBinding.control }}
+                            })
+                        elseif not checkIs039OrHigher() then
+                            -- Legacy (<0.39): show in top-right legend even without key binding
                             local actionItem = {}
                             if type(action) == 'table' then
                                 for k, v in pairs(action) do actionItem[k] = v end
                             end
                             actionItem.action = actionStr
-                            actionItem.label = action.title
-
-                            if keyboardBinding and keyboardDev then
-                                actionItem.bindings = {{ device = keyboardDev, control = keyboardBinding.control }}
-                            end
-                            actionsListToDraw = { actionItem }
+                            actionItem.label = title
+                            table.insert(actionsList, actionItem)
                         end
+                    end
+                end
+
+                if not next(actionTitles) then
+                    local rawFallback = hoveredTrgObj.action and hoveredTrgObj.action ~= "" and hoveredTrgObj.action or hoveredId
+                    local fallbackTitle = formatActionTitle(rawFallback)
+                    actionTitles["action0"] = fallbackTitle
+                    if not checkIs039OrHigher() then
+                        table.insert(actionsList, {
+                            action = hoveredId,
+                            label = fallbackTitle
+                        })
+                    end
+                end
+
+                if #actionsList > 0 then
+                    actionsListToDraw = actionsList
+                end
+
+                -- In >=0.39, prepare the 3D/screen-space bubble target payload
+                if checkIs039OrHigher() and hoveredTrgObj._center then
+                    local drawCenter = hoveredTrgObj._center
+                    local screenPos = worldPosToScreenPercent01(drawCenter)
+                    if screenPos then
+                        local hx = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.x or 0.1
+                        local hy = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.y or 0.1
+                        local hz = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.z or 0.1
+                        local ax = hoveredTrgObj._ax or vec3(1,0,0)
+                        local ay = hoveredTrgObj._ay or vec3(0,1,0)
+                        local az = hoveredTrgObj._az or vec3(0,0,1)
+                        local labelPlacement = computeLabelPlacementForPropTrigger(drawCenter, ax, ay, az, hx, hy, hz, screenPos)
+                        propTriggers_targetToPublish = {
+                            x = screenPos.x,
+                            y = screenPos.y,
+                            actionTitles = actionTitles,
+                            color = {r=0.235, g=0.396, b=1.0, a=0.75},
+                            labelPlacement = labelPlacement,
+                            name = hoveredId
+                        }
                     end
                 end
             end
 
-            -- Instead of updating the UI immediately here (which gets overwritten by subsequent vehicles), we save it
             if actionsListToDraw then
                 propTriggers_globalActionsToDraw = actionsListToDraw
             end
 
-            -- ── Click handling ──
+            -- ÔöÇÔöÇ Click handling ÔöÇÔöÇ
             if hoveredId and cursorVisible then
                 if im.IsMouseClicked(0) then
                     for _, trg in ipairs(triggers) do
@@ -794,6 +1197,22 @@ local function onPreRender(dt)
         end
     end
 
+    -- In >=0.39, update or clear the trigger details bubble
+    if checkIs039OrHigher() then
+        if propTriggers_targetToPublish then
+            setPropTriggerCrosshairTargetStream(
+                propTriggers_targetToPublish.x,
+                propTriggers_targetToPublish.y,
+                propTriggers_targetToPublish.actionTitles,
+                propTriggers_targetToPublish.color,
+                propTriggers_targetToPublish.labelPlacement,
+                propTriggers_targetToPublish.name
+            )
+        else
+            clearPropTriggerCrosshairTargetStream()
+        end
+    end
+
     if extensions.ui_bindingsLegend then
         if propTriggers_globalActionsToDraw then
             extensions.ui_bindingsLegend.addActions('propTriggers', propTriggers_globalActionsToDraw, { priority = 11, hideConstant = true })
@@ -807,6 +1226,10 @@ local function onExtensionLoaded()
 end
 
 local function onExtensionUnloaded()
+    clearPropTriggerCrosshairTargetStream()
+    if extensions.ui_bindingsLegend then
+        extensions.ui_bindingsLegend.addActions('propTriggers', {})
+    end
 end
 
 M.onExtensionLoaded         = onExtensionLoaded

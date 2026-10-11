@@ -151,3 +151,13 @@ Define clickable vehicle interaction actions in `vehicles/<vehicle_name>/<vehicl
   }
 }
 ```
+
+---
+
+## Engine Version Compatibility (v0.38 & v0.39+)
+
+`propTriggers` includes automatic dynamic version detection (`checkIs039OrHigher()`):
+
+- **BeamNG < v0.39 (v0.38 and earlier):** Renders hover actions and keyboard/controller bindings via `extensions.ui_bindingsLegend.addActions('propTriggers', ...)` in the native top-right legend bar, matching vanilla v0.38 behavior.
+- **BeamNG v0.39+:** Streams 3D screen-space bubble target payloads via `setPropTriggerCrosshairTargetStream` with real-time edge-aware label placement, matching the vanilla v0.39 crosshair interaction system.
+
