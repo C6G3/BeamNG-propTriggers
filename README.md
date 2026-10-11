@@ -10,7 +10,7 @@ Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nod
 
 - **Live Prop Inheritance:** Triggers extract the real-time world transform (position & rotation) of any `targetProp` and follow it seamlessly.
 - **Multiple Target Props (Variant / Swap Support):** `targetProp` (or `targetProps`) accepts a list of candidate prop names (JSON array, nested table, or comma/semicolon/pipe-separated string). `propTriggers` recursively iterates through candidates to bind to whichever prop is currently installed and active on the vehicle (e.g. interchangeable steering wheel variants).
-- **Dynamic In-Game Reconfiguration:** When the player changes vehicle parts in the Vehicle Config menu mid-game, `onVehicleResetted` automatically re-evaluates the candidate lists and re-binds triggers to the newly equipped parts on the fly.
+- **Dynamic In-Game Reconfiguration:** When the player changes vehicle parts in the Vehicle Config menu mid-game, `onVehicleResetted` automatically re-evaluates candidate lists and re-binds triggers to newly equipped parts on the fly.
 - **Mesh Triggers:** Adds a dedicated `mesh` trigger type. You can supply a `.obj` file to define the exact 3D shape of your clickable collision area instead of relying solely on basic boxes or spheres.
 - **Extended Mouse & Wheel Controls:**
   - **Left Click:** Triggers `action0` / `leftClick` / `mouseLeft`
@@ -95,9 +95,29 @@ Traditional node-based triggers (`idRef`, `idX`, `idY`) remain supported:
 
 ---
 
-### 4. Event Links (`propTriggerEventLinks`)
+### 4. Enabling Actions (`actionsEnabled`)
 
-Map triggers to actions in your vehicle's `interaction.json` / `input_actions.json`. Supports mouse buttons (`action0`, `action1`, `action2`) as well as scroll wheel events (`wheelUp`, `wheelDown`):
+In order for triggers to be highlighted and clickable in-game, their action IDs must be declared in your vehicle JBeam's `"actionsEnabled"` list:
+
+```json
+"actionsEnabled": [
+    ["id"],
+    ["cruisecontrol_+"],
+    ["cruisecontrol_-"],
+    ["info_volUp"],
+    ["info_volDown"],
+    ["info_prev"],
+    ["info_next"],
+    ["info_mute"],
+    ["info_voiceNav"]
+],
+```
+
+---
+
+### 5. Event Links (`propTriggerEventLinks`)
+
+Map triggers to actions defined in your vehicle's `interaction.json` (or `input_actions.json`). Supports mouse buttons (`action0`, `action1`, `action2`) as well as scroll wheel events (`wheelUp`, `wheelDown`):
 
 ```json
 "propTriggerEventLinks":[
@@ -124,17 +144,23 @@ Map triggers to actions in your vehicle's `interaction.json` / `input_actions.js
 
 ---
 
-## Action Definition Example (`interaction.json` / `input_actions.json`)
+## Action Definition (`interaction.json` vs `input_actions.json`)
 
-Define your actions in `vehicle_name.interaction.json` or `input_actions.json`:
+> [!IMPORTANT]
+> **Avoid Action Duplication**: BeamNG's input manager loads both `input_actions.json` and `<vehicle>.interaction.json`. Define each action in **only one** of these files. Declaring the same action in both files will trigger BeamNG's `"Detected duplication of action"` error.
+
+Define clickable vehicle interaction actions in `vehicles/<vehicle_name>/<vehicle_name>.interaction.json`:
 
 ```json
 {
-  "info_volUp":    { "order": 48, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeUp(0.02)",   "title": "Infotainment Volume Up",        "desc": "Increases infotainment volume by 2%" },
-  "info_volDown":  { "order": 49, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeDown(0.02)", "title": "Infotainment Volume Down",      "desc": "Decreases infotainment volume by 2%" },
-  "info_prev":     { "order": 50, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaPrevious()",  "title": "Infotainment Previous Track",   "desc": "Previous media track or image" },
-  "info_next":     { "order": 51, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaNext()",      "title": "Infotainment Next Track",       "desc": "Next media track or image" },
-  "info_mute":     { "order": 52, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleMute()",      "title": "Infotainment Toggle Mute",      "desc": "Toggles infotainment mute" },
-  "info_voiceNav": { "order": 53, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleVoiceNav()", "title": "Toggle Voice Navigation",        "desc": "Toggles navigation voice guidance on or off" }
+  "fileversion": 2,
+  "actions": {
+    "info_volUp":    { "order": 48, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeUp(0.02)",   "title": "Infotainment Volume Up",        "desc": "Increases infotainment volume by 2%" },
+    "info_volDown":  { "order": 49, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.volumeDown(0.02)", "title": "Infotainment Volume Down",      "desc": "Decreases infotainment volume by 2%" },
+    "info_prev":     { "order": 50, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaPrevious()",  "title": "Infotainment Previous Track",   "desc": "Previous media track or image" },
+    "info_next":     { "order": 51, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.mediaNext()",      "title": "Infotainment Next Track",       "desc": "Next media track or image" },
+    "info_mute":     { "order": 52, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleMute()",      "title": "Infotainment Toggle Mute",      "desc": "Toggles infotainment mute" },
+    "info_voiceNav": { "order": 53, "ctx": "elua", "onDown": "extensions.c6g3_infotainment.toggleVoiceNav()", "title": "Toggle Voice Navigation",        "desc": "Toggles navigation voice guidance on or off" }
+  }
 }
 ```
