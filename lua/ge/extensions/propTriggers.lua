@@ -1073,8 +1073,8 @@ local function onPreRender(dt)
                 local actionTitles = {}
                 local actionsList = {}
 
-                local actionKeys = { "action0", "action1", "action2", "wheelUp", "wheelDown" }
-                for _, actionKey in ipairs(actionKeys) do
+                for actionIdx = 0, 2 do
+                    local actionKey = "action" .. tostring(actionIdx)
                     local links = vehLinks and vehLinks[hoveredId] and vehLinks[hoveredId][actionKey]
                     local lnk = type(links) == "table" and links[1] or nil
                     if lnk and lnk.inputAction then
@@ -1090,13 +1090,7 @@ local function onPreRender(dt)
 
                         local rawTitle = action and action.title or actionName
                         local title = formatActionTitle(rawTitle)
-                        if actionKey == "wheelUp" then
-                            if not actionTitles["action1"] then actionTitles["action1"] = title end
-                        elseif actionKey == "wheelDown" then
-                            if not actionTitles["action2"] then actionTitles["action2"] = title end
-                        else
-                            actionTitles[actionKey] = title
-                        end
+                        actionTitles[actionKey] = title
 
                         local actionStr = actionName
                         if action and action.vehicle and lnk.namespace == 'vehicle' then
@@ -1235,13 +1229,12 @@ local function onPreRender(dt)
                     end
                 end
 
-                -- Mouse Wheel (wheelUp / wheelDown / wheel / action1 & action2 fallback)
+                -- Mouse Wheel (wheelUp / wheelDown / wheel)
                 local mouseWheel = im.GetIO().MouseWheel
                 if mouseWheel and mouseWheel ~= 0 then
                     local isUp = mouseWheel > 0
                     local inputKey = isUp and 'wheelUp' or 'wheelDown'
                     local altKey   = isUp and 'wheel_up' or 'wheel_down'
-                    local fallbackAction = isUp and 'action1' or 'action2'
                     for _, trg in ipairs(triggers) do
                         if trg.id == hoveredId then
                             firePropTriggerEvent(vehId, trg.id, inputKey, 1)
@@ -1250,14 +1243,6 @@ local function onPreRender(dt)
                             firePropTriggerEvent(vehId, trg.id, altKey, 0)
                             firePropTriggerEvent(vehId, trg.id, 'wheel', isUp and 1 or -1)
                             firePropTriggerEvent(vehId, trg.id, 'wheel', 0)
-
-                            -- Also fire action1 (up) / action2 (down) if trigger has those links and no dedicated wheel links
-                            local vehLinks = propTriggerLinksDict[vehId]
-                            local trgLinks = vehLinks and vehLinks[trg.id]
-                            if trgLinks and not trgLinks[inputKey] and not trgLinks[altKey] and trgLinks[fallbackAction] then
-                                firePropTriggerEvent(vehId, trg.id, fallbackAction, 1)
-                                firePropTriggerEvent(vehId, trg.id, fallbackAction, 0)
-                            end
                             break
                         end
                     end
