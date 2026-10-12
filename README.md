@@ -139,6 +139,18 @@ Map triggers to actions defined in your vehicle's `interaction.json` (or `input_
 ],
 ```
 
+#### Mouse & Wheel Input Reference:
+| `triggerInput` | Triggered By | Typical Usage |
+|---|---|---|
+| `action0` | **Left Mouse Click** | Primary button press, toggle, select |
+| `action1` | **Right Mouse Click** | Secondary action, reverse toggle, step down |
+| `action2` | **Middle Mouse Click** (Wheel Button Press) | Confirmation, mute, mode reset |
+| `wheelUp` | **Mouse Wheel Scroll Up** (or `wheel_up`) | Volume up, fan speed up, menu up |
+| `wheelDown` | **Mouse Wheel Scroll Down** (or `wheel_down`) | Volume down, fan speed down, menu down |
+| `wheel` | **Mouse Wheel Delta** (`+1` on up, `-1` on down) | Direct step input |
+
+*(Note: If a knob trigger only defines `action1` and `action2` without dedicated `wheelUp`/`wheelDown` links, scrolling the wheel automatically triggers `action1` on scroll up and `action2` on scroll down as a convenient fallback).*
+
 ---
 
 ## Action Definition (`interaction.json` vs `input_actions.json`)
