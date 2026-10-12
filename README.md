@@ -12,7 +12,8 @@ Traditionally, BeamNG triggers (`vehicleTriggers`) are bound to static JBeam nod
 - **Multiple Target Props (Variant / Swap Support):** `targetProp` (or `targetProps`) accepts a list of candidate prop names (JSON array, nested table, or comma/semicolon/pipe-separated string). `propTriggers` recursively iterates through candidates to bind to whichever prop is currently installed and active on the vehicle (e.g. interchangeable steering wheel variants).
 - **Dynamic In-Game Reconfiguration:** When the player changes vehicle parts in the Vehicle Config menu mid-game, `onVehicleResetted` automatically re-evaluates candidate lists and re-binds triggers to newly equipped parts on the fly.
 - **Mesh Triggers:** Adds a dedicated `mesh` trigger type. You can supply a `.obj` file to define the exact 3D shape of your clickable collision area instead of relying solely on basic boxes or spheres.
-- **Native UI Integration:** Fully supports the vanilla BeamNG `ui_bindingsLegend`. When a player hovers over your custom trigger, the action title and keyboard shortcut appear in the top-right / top-left corner bar exactly like a native game trigger.
+- **Comprehensive Mouse & Wheel Controls:** Supports Left Click (`action0`), Right Click (`action1`), Middle Click (`action2`), and Mouse Wheel scroll (`wheelUp` / `wheelDown` / `wheel`), ideal for interactive rotary dials, volume knobs, fan speeds, switches, and buttons.
+- **Native UI Integration:** Fully supports the vanilla BeamNG `ui_bindingsLegend` (< 0.39) and the 3D crosshair target bubble (>= 0.39). When hovering over a custom trigger, action titles and keyboard shortcuts appear identically to vanilla vehicle triggers.
 - **Dynamic Event Links:** Features a `propTriggerEventLinks` system that works identically to `triggerEventLinks2`.
 - **Transform Offsets:** Easily offset the clickable area relative to the prop using `baseTranslation` and `baseRotation`.
 
@@ -115,17 +116,26 @@ Map triggers to actions defined in your vehicle's `interaction.json` (or `input_
 "propTriggerEventLinks":[
     ["triggerId", "triggerInput", "inputAction"],
     
-    // Steering wheel cruise control
+    // Steering wheel cruise control (Left Click)
     ["cruisecontrol_+", "action0", "cruisecontrol_+"],
     ["cruisecontrol_-", "action0", "cruisecontrol_-"],
     
-    // Steering wheel audio & nav controls
+    // Steering wheel audio & nav controls (Left Click)
     ["info_volUp",    "action0", "info_volUp"],
     ["info_volDown",  "action0", "info_volDown"],
     ["info_prev",     "action0", "info_prev"],
     ["info_next",     "action0", "info_next"],
     ["info_mute",     "action0", "info_mute"],
-    ["info_voiceNav", "action0", "info_voiceNav"]
+    ["info_voiceNav", "action0", "info_voiceNav"],
+
+    // Dual-Action Button Example: Left Click vs Right Click
+    ["drive_mode_btn", "action0", "next_drive_mode"],
+    ["drive_mode_btn", "action1", "prev_drive_mode"],
+
+    // Rotary / Volume Knob Example: Mouse Wheel Up / Down
+    ["rotary_volume",  "wheelUp",   "info_volUp"],
+    ["rotary_volume",  "wheelDown", "info_volDown"],
+    ["rotary_volume",  "action0",   "info_mute"]
 ],
 ```
 

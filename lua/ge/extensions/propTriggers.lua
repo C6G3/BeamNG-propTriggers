@@ -1,4 +1,4 @@
-﻿-- This Source Code Form is subject to the terms of the MIT License.
+-- This Source Code Form is subject to the terms of the MIT License.
 -- Copyright (c) 2026 
 -- Author C6g3. 
 --
@@ -1016,7 +1016,7 @@ local function onPreRender(dt)
                 local tr, tg, tb = 0.35, 0.51, 0.76
                 local targetAlpha = 0.28 * proximity
 
-                if isHovered and im.IsMouseDown(0) then
+                if isHovered and (im.IsMouseDown(0) or im.IsMouseDown(1) or im.IsMouseDown(2)) then
                     tr, tg, tb, targetAlpha = 0.10, 1.00, 0.40, 1.00
                 elseif isHovered then
                     tr, tg, tb, targetAlpha = 0.10, 0.75, 0.30, 0.28
@@ -1166,8 +1166,9 @@ local function onPreRender(dt)
                 propTriggers_globalActionsToDraw = actionsListToDraw
             end
 
-            -- ÔöÇÔöÇ Click handling ÔöÇÔöÇ
+            -- ── Input handling (Clicks & Mouse Wheel) ──
             if hoveredId and cursorVisible then
+                -- Left Click (action0)
                 if im.IsMouseClicked(0) then
                     for _, trg in ipairs(triggers) do
                         if trg.id == hoveredId then
@@ -1185,6 +1186,63 @@ local function onPreRender(dt)
                                 beObj:queueLuaCommand(string.format('%s', trg.action))
                             end
                             firePropTriggerEvent(vehId, trg.id, 'action0', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Right Click (action1)
+                if im.IsMouseClicked(1) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action1', 1)
+                            break
+                        end
+                    end
+                end
+
+                if im.IsMouseReleased(1) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action1', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Middle Click (action2)
+                if im.IsMouseClicked(2) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action2', 1)
+                            break
+                        end
+                    end
+                end
+
+                if im.IsMouseReleased(2) then
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, 'action2', 0)
+                            break
+                        end
+                    end
+                end
+
+                -- Mouse Wheel (wheelUp / wheelDown / wheel)
+                local mouseWheel = im.GetIO().MouseWheel
+                if mouseWheel and mouseWheel ~= 0 then
+                    local isUp = mouseWheel > 0
+                    local inputKey = isUp and 'wheelUp' or 'wheelDown'
+                    local altKey   = isUp and 'wheel_up' or 'wheel_down'
+                    for _, trg in ipairs(triggers) do
+                        if trg.id == hoveredId then
+                            firePropTriggerEvent(vehId, trg.id, inputKey, 1)
+                            firePropTriggerEvent(vehId, trg.id, inputKey, 0)
+                            firePropTriggerEvent(vehId, trg.id, altKey, 1)
+                            firePropTriggerEvent(vehId, trg.id, altKey, 0)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', isUp and 1 or -1)
+                            firePropTriggerEvent(vehId, trg.id, 'wheel', 0)
                             break
                         end
                     end
