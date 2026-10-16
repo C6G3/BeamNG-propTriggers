@@ -159,9 +159,8 @@ end
 
 local function worldPosToScreenPercent01(worldPos, out)
     if not worldPos then return nil end
-    if extensions.core_vehicleTriggers and extensions.core_vehicleTriggers.worldPosToScreenPercent01 then
-        return extensions.core_vehicleTriggers.worldPosToScreenPercent01(worldPos, out)
-    end
+    -- Own camera context, refreshed in onDrawDebug for this frame's camera (core_vehicleTriggers takes its context in
+    -- onUpdate, before core_camera.onPreRender moves the camera, so bubbles projected with it trailed the boxes).
     if not w2sContextValid and not updateWorldPosToScreenContext() then return nil end
 
     w2sToPoint:setSub2(worldPos, w2sContextCamPos)
@@ -344,6 +343,9 @@ local function clearPropTriggerCrosshairTargetStream()
         lastPropTriggerCrosshairSent = false
     end
 end
+
+-- Hovered trigger's box for the bubble, set in onPreRender, projected and sent in onDrawDebug (same frame)
+local pendingBubble = nil
 
 local function rayPointDist(rayPos, rayDir, point)
     local d = point - rayPos
@@ -798,6 +800,7 @@ local function onCursorVisibilityChanged(visible)
 end
 
 local function onPreRender(dt)
+    pendingBubble = nil
     if not cursorVisible then
         if checkIs039OrHigher() then clearPropTriggerCrosshairTargetStream() end
         return
@@ -1138,27 +1141,27 @@ local function onPreRender(dt)
                     actionsListToDraw = actionsList
                 end
 
-                -- In >=0.39, prepare the 3D/screen-space bubble target payload
+                -- In >=0.39, keep the hovered box exactly as drawn this frame (center, axes, half size; mesh triggers
+                -- with their mesh box offset, like the hit test); onDrawDebug projects it with this frame's camera
                 if checkIs039OrHigher() and hoveredTrgObj._center then
-                    local drawCenter = hoveredTrgObj._center
-                    local screenPos = worldPosToScreenPercent01(drawCenter)
-                    if screenPos then
-                        local hx = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.x or 0.1
-                        local hy = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.y or 0.1
-                        local hz = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.z or 0.1
-                        local ax = hoveredTrgObj._ax or vec3(1,0,0)
-                        local ay = hoveredTrgObj._ay or vec3(0,1,0)
-                        local az = hoveredTrgObj._az or vec3(0,0,1)
-                        local labelPlacement = computeLabelPlacementForPropTrigger(drawCenter, ax, ay, az, hx, hy, hz, screenPos)
-                        propTriggers_targetToPublish = {
-                            x = screenPos.x,
-                            y = screenPos.y,
-                            actionTitles = actionTitles,
-                            color = {r=0.235, g=0.396, b=1.0, a=0.75},
-                            labelPlacement = labelPlacement,
-                            name = hoveredId
-                        }
+                    local ax = hoveredTrgObj._ax or vec3(1,0,0)
+                    local ay = hoveredTrgObj._ay or vec3(0,1,0)
+                    local az = hoveredTrgObj._az or vec3(0,0,1)
+                    local boxCenter = hoveredTrgObj._center
+                    local off = hoveredTrgObj._meshBoxCenterOffset
+                    if off then
+                        boxCenter = boxCenter + ax * off.x + ay * off.y + az * off.z
                     end
+                    propTriggers_targetToPublish = {
+                        center = boxCenter,
+                        ax = ax, ay = ay, az = az,
+                        hx = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.x or 0.1,
+                        hy = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.y or 0.1,
+                        hz = hoveredTrgObj.halfSize and hoveredTrgObj.halfSize.z or 0.1,
+                        actionTitles = actionTitles,
+                        color = {r=0.235, g=0.396, b=1.0, a=0.75},
+                        name = hoveredId
+                    }
                 end
             end
 
@@ -1255,21 +1258,8 @@ local function onPreRender(dt)
         end
     end
 
-    -- In >=0.39, update or clear the trigger details bubble
-    if checkIs039OrHigher() then
-        if propTriggers_targetToPublish then
-            setPropTriggerCrosshairTargetStream(
-                propTriggers_targetToPublish.x,
-                propTriggers_targetToPublish.y,
-                propTriggers_targetToPublish.actionTitles,
-                propTriggers_targetToPublish.color,
-                propTriggers_targetToPublish.labelPlacement,
-                propTriggers_targetToPublish.name
-            )
-        else
-            clearPropTriggerCrosshairTargetStream()
-        end
-    end
+    -- In >=0.39 the bubble is projected and sent (or cleared) in onDrawDebug, after the camera moved for this frame
+    pendingBubble = propTriggers_targetToPublish
 
     if extensions.ui_bindingsLegend then
         if propTriggers_globalActionsToDraw then
@@ -1278,6 +1268,26 @@ local function onPreRender(dt)
             extensions.ui_bindingsLegend.addActions('propTriggers', {})
         end
     end
+end
+
+-- Bubble for the hovered box: projected with this frame's camera. onDrawDebug runs right after all onPreRender hooks
+-- (lua/ge/main.lua luaPreRender), so core_camera.onPreRender has moved the camera the boxes are rendered with.
+-- Raycast and hover stay in onPreRender exactly as before.
+local function onDrawDebug()
+    if not checkIs039OrHigher() then return end
+    local b = pendingBubble
+    if not b then
+        clearPropTriggerCrosshairTargetStream()
+        return
+    end
+    updateWorldPosToScreenContext()
+    local screenPos = worldPosToScreenPercent01(b.center)
+    if not screenPos then
+        clearPropTriggerCrosshairTargetStream()
+        return
+    end
+    local labelPlacement = computeLabelPlacementForPropTrigger(b.center, b.ax, b.ay, b.az, b.hx, b.hy, b.hz, screenPos)
+    setPropTriggerCrosshairTargetStream(screenPos.x, screenPos.y, b.actionTitles, b.color, labelPlacement, b.name)
 end
 
 local function onExtensionLoaded()
@@ -1293,6 +1303,7 @@ end
 M.onExtensionLoaded         = onExtensionLoaded
 M.onExtensionUnloaded       = onExtensionUnloaded
 M.onPreRender               = onPreRender
+M.onDrawDebug               = onDrawDebug
 M.onVehicleSpawned          = onVehicleSpawned
 M.onVehicleResetted         = onVehicleResetted
 M.onVehicleDestroyed        = onVehicleDestroyed
